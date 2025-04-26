@@ -13,7 +13,11 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+  "ipaddress",
+  "tinydb",
+  "pyserial",
+]
 description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]
 license = "MIT"
