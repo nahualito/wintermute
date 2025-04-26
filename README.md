@@ -1,4 +1,4 @@
-![](docs/images/Cthuluh_beer.png) 
+![](docs/assets/images/Cthuluh_beer.png) 
 # Welcome to wintermute’s documentation!
 
 ## Usage
