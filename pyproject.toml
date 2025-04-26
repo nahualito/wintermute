@@ -1,0 +1,113 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling>=1.26.3,<2"]
+
+[project]
+authors = [{ email = "you@example.com", name = "Your Name" }]
+classifiers = [
+  "Natural Language :: English",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = []
+description = "Your project description here."
+dynamic = ["version"]
+license = "MIT"
+name = "template-python"
+readme = "README.md"
+requires-python = ">=3.10,<4"
+
+[project.optional-dependencies]
+checks = [
+  "mypy==1.15.0",
+  "ruff>=0.11,<0.12",
+]
+docs = [
+  "mkdocs-material>=9,<10",
+]
+tests = [
+  "coverage[toml]>=7,<8",
+  "httpx>=0.23,<1",
+  "pytest>=8.1.1,<9",
+  "pytest-mock>=3,<4",
+]
+
+[tool.coverage.report]
+exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]
+fail_under = 70
+show_missing = true
+
+[tool.coverage.run]
+command_line = "-m pytest"
+source = ["template_python", "tests"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/template_python"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["template_python"]
+
+[tool.hatch.envs.ci]
+dev-mode = false
+features = [
+  "checks",
+  "tests",
+]
+path = ".venv"
+
+[tool.hatch.envs.default]
+dev-mode = true
+features = [
+  "checks",
+  "docs",
+  "tests",
+]
+path = ".venv"
+
+[tool.hatch.envs.default.scripts]
+check = [
+  "ruff check",
+  "ruff format --check",
+  "mypy",
+  "npx -s -y prettier@'^3.4' . --check",
+  "npx -s -y cspell --dot --gitignore *.md **/*.md",
+]
+format = [
+  "ruff check --fix",
+  "ruff format",
+  "npx -s -y prettier@'^3.4' . --write",
+]
+
+[tool.hatch.envs.production]
+dev-mode = false
+features = []
+path = ".venv"
+
+[tool.hatch.version]
+path = "template_python/__init__.py"
+
+[tool.mypy]
+files = ["**/*.py"]
+show_error_codes = true
+strict = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+minversion = "6.0"
+testpaths = ["tests"]
+
+[tool.ruff]
+src = ["template_python", "tests"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["template_python", "tests"]
