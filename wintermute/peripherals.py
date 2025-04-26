@@ -10,8 +10,9 @@ to give access to hardware peripherals and have more abstraction for automation
 and attacking.
 """
 
-from enum import Enum
 import json
+from enum import Enum
+
 
 class PeripheralType(Enum):
     Unknown = 0x0

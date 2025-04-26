@@ -8,12 +8,14 @@ Core classes for OnoSendai
 This file contains the core classes for the onoSendai deck, these are not going to be exported
 to the deck, they are for internal deck use.
 """
-import json 
 import ipaddress
+import json
 import re
-from datetime import datetime
-from tinydb import TinyDB, Query
 import uuid
+from datetime import datetime
+
+from tinydb import Query, TinyDB
+
 
 class ReproductionStep:
     """This class holds a reproduction step for vulnerabilities"""
@@ -215,7 +217,7 @@ class Device:
         self.services = []
         if services is not None:
             for service in services:
-                s = self.addService(**service)
+                self.addService(**service)
 
     def addService(self, protocol='ipv4', app=None, portNumber=0, banner=None, transport_layer=None, vulnerabilities=None):
         s = Service(protocol=protocol, app=app, portNumber=portNumber, banner=banner, transport_layer=transport_layer, vulnerabilities=vulnerabilities)
@@ -265,7 +267,7 @@ class Analyst:
             bool: True if it's valid, false if it's incorrect format
         """
         if len(email) > 7:
-            if re.search(r'^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$', email) != None:
+            if re.search(r'^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$', email) is not None:
                 return True
         return False
 
