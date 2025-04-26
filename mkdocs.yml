@@ -12,9 +12,9 @@ markdown_extensions:
       toc_depth: 3
 nav:
   - "index.md"
-repo_name: br3ndonland/template-python
-repo_url: https://github.com/br3ndonland/template-python
-site_name: template-python docs
+repo_name: nahualito/wintermute
+repo_url: https://github.com/nahualito/wintermute
+site_name: wintermute docs
 site_url: ""
 theme:
   favicon: assets/images/favicon.png

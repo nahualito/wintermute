@@ -3,7 +3,7 @@ build-backend = "hatchling.build"
 requires = ["hatchling>=1.26.3,<2"]
 
 [project]
-authors = [{ email = "you@example.com", name = "Your Name" }]
+authors = [{ email = "enrique.sanchez@caissa-security.com", name = "Enrique Sanchez" }]
 classifiers = [
   "Natural Language :: English",
   "Programming Language :: Python :: 3",
@@ -14,10 +14,10 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = []
-description = "Your project description here."
+description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]
 license = "MIT"
-name = "template-python"
+name = "wintermute"
 readme = "README.md"
 requires-python = ">=3.10,<4"
 
@@ -43,13 +43,13 @@ show_missing = true
 
 [tool.coverage.run]
 command_line = "-m pytest"
-source = ["template_python", "tests"]
+source = ["wintermute", "tests"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/template_python"]
+include = ["/wintermute"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["template_python"]
+packages = ["wintermute"]
 
 [tool.hatch.envs.ci]
 dev-mode = false
@@ -88,7 +88,7 @@ features = []
 path = ".venv"
 
 [tool.hatch.version]
-path = "template_python/__init__.py"
+path = "wintermute/__init__.py"
 
 [tool.mypy]
 files = ["**/*.py"]
@@ -101,7 +101,7 @@ minversion = "6.0"
 testpaths = ["tests"]
 
 [tool.ruff]
-src = ["template_python", "tests"]
+src = ["wintermute", "tests"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -110,4 +110,4 @@ docstring-code-format = true
 extend-select = ["I"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["template_python", "tests"]
+known-first-party = ["wintermute", "tests"]
