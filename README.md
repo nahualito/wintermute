@@ -19,131 +19,130 @@ docker run -it --rm -v $(pwd):/opt/wintermute
 
 The current class structure is the following:
 
-```plantuml
-@startuml
-Vulnerability <- Risk
+```mermaid
+classDiagram
+Vulnerability <-- Risk
 Service <-- Vulnerability
 Pentest <|-- Operation
 Operation <-- Analyst
 Operation <-- Team
 User <-- Team
 Account <-- Team
-User -> Account
+User --> Account
 User <-- Device
 Device <-- Service
 wintermute <-- dbController
 wintermute <-- cartridge
-Operation -> wintermute
+Operation --> wintermute
 Device <-- User
 class wintermute {
-	+ prompt
-	+ loadedModules{}
-	+ dbController
-	+ load()
-	+ unload()
-	+ set()
++ prompt
++ loadedModules
++ dbController
++ load()
++ unload()
++ set()
 }
 class Operation {
-  + operation_name
-  + db
-  + uuid
-  + analysts[]
-  + devices[]
-  + users[]
-  + ticket
-  + getTicketInformation()
-  + addAnalyst()
-  + addDevice()
-  + addUser()
-  + {abstract} dbOperation()
-  + toJSON()
++ operation_name
++ db
++ uuid
++ analysts[]
++ devices[]
++ users[]
++ ticket
++ getTicketInformation()
++ addAnalyst()
++ addDevice()
++ addUser()
++ dbOperation()
++ toJSON()
 }
 class Pentest {
-	+ Application
-	+ ANVIL
-	+ dataClassification
-	+ loadPentest()
-	+ save()
-	+ toJSON()
++ Application
++ ANVIL
++ dataClassification
++ loadPentest()
++ save()
++ toJSON()
 }
 class Analyst {
-  + addAnalyst()
-  + deleteAnalyst()
-	+ Name
-	+ alias
-	+ email
++ addAnalyst()
++ deleteAnalyst()
++ Name
++ alias
++ email
 }
 class Device {
-	+ hostname
-	+ ipaddr
-	+ macaddr
-	+ operatingsystem
-	+ fqdn
-	+ services[]
-	+ addService()
-	+ toJSON()
++ hostname
++ ipaddr
++ macaddr
++ operatingsystem
++ fqdn
++ services[]
++ addService()
++ toJSON()
 }
 class Service {
-	+ protocol
-	+ app
-	+ portNumber
-	+ banner
-	+ transport_layer
-	+ vulnerabilities[]
-	+ addVulnerability()
-	+ toJSON()
++ protocol
++ app
++ portNumber
++ banner
++ transport_layer
++ vulnerabilities[]
++ addVulnerability()
++ toJSON()
 }
 class Vulnerability {
-	+ title
-	+ description
-  + threat
-  + cvss
-  + mitigation
-  + fix
-  + mitigation_desc
-  + fix_desc
-  + verified 
-  + risk
-  + setRisk()
-  + to JSON()
++ title
++ description
++ threat
++ cvss
++ mitigation
++ fix
++ mitigation_desc
++ fix_desc
++ verified
++ risk
++ setRisk()
++ to JSON()
 }
 class Risk {
-	+ likelihood
-	+ impact
-	+ severity
-	+ toJSON()
++ likelihood
++ impact
++ severity
++ toJSON()
 }
 class dbController {
-	+ insert()
-	+ update()
-	+ delete()
-	+ dbName
++ insert()
++ update()
++ delete()
++ dbName
 }
 class cartridge {
-	+ name
++ name
 }
 class User {
-	+ alias
-	+ email
-	+ groups[]
-	+ teams[]
-	+ permissions[]
++ alias
++ email
++ groups[]
++ teams[]
++ permissions[]
 }
 class Account {
-	+ Name
-	+ AccountID
-	+ Description
-	+ Admins[]
-	+ Users[]
++ Name
++ AccountID
++ Description
++ Admins[]
++ Users[]
 }
 class Team {
-	+ Name
-	+ Manager
-	+ Users[]
-	+ Accounts[]
-	+ CTI
++ Name
++ Manager
++ Users[]
++ Accounts[]
++ CTI
 }
-@enduml
 ```
 
 ## What does it do now?
