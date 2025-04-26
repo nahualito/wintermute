@@ -12,6 +12,7 @@ and attacking.
 
 import json
 from enum import Enum
+from typing import Any, Dict
 
 
 class PeripheralType(Enum):
@@ -28,35 +29,51 @@ class PeripheralType(Enum):
 
 
 class Peripheral:
-    def __init__(self, name=None, pins={}, pType=PeripheralType.Unknown):
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.Unknown,
+    ) -> None:
         self.name = name
         self.pins = pins
         self.pType = pType
         pass
 
-    def toJSON(self):
-        return json.dumps(self, default=lambda o: o.__dict__, 
-            sort_keys=True, indent=4)
+    def toJSON(self) -> str:
+        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+
 
 class UART(Peripheral):
     """Class that defines the UART interface"""
 
-    def __init__(self, name=None, pins={}, pType=PeripheralType.UART, baudrate = 9600, bytesize = 8, parity = 'N', stopbits = 1, comPort = None):
-        self.tx = None
-        self.rx = None
-        self.gnd = None
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.UART,
+        baudrate: int = 9600,
+        bytesize: int = 8,
+        parity: str = "N",
+        stopbits: int = 1,
+        comPort: str = "",
+    ) -> None:
+        self.tx = ""
+        self.rx = ""
+        self.gnd = ""
         self.baudrate = baudrate
         self.bytesize = bytesize
         self.parity = parity
         self.stopbits = stopbits
-        self.com_port = comPort #Port connected to the user's device to speak to the UART
+        self.com_port = (
+            comPort  # Port connected to the user's device to speak to the UART
+        )
         if pins:
-            self.tx = pins['tx']
-            self.rx = pins['rx']
-            self.gnd = pins['gnd']
+            self.tx = pins["tx"]
+            self.rx = pins["rx"]
+            self.gnd = pins["gnd"]
 
         super().__init__(name, pins, pType)
 
-    def toJSON(self):
-        return json.dumps(self, default=lambda o: o.__dict__, 
-            sort_keys=True, indent=4)
+    def toJSON(self) -> str:
+        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
