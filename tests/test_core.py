@@ -1,8 +1,9 @@
-import pytest
-import json
 import ipaddress
+import json
 
-from wintermute.core import Operation, User, Device
+import pytest
+
+from wintermute.core import Device, Operation, User
 
 """
 Operation test cases
