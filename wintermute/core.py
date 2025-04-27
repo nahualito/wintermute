@@ -295,7 +295,12 @@ class Device:
         pass
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__ if '__dict__' in dir(o) else str(o), sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else str(o),
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class User:
