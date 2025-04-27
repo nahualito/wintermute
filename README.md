@@ -186,7 +186,7 @@ wintermute.database.with_default_category(
 >>> quit()
 ```
 
-Also it allows for \* importing, this still will only import modules and not the functions to remove the posibility of having a "dirty environment" and function overrides.
+Also it allows for \* importing, this still will only import modules and not the functions to remove the possibility of having a "dirty environment" and function overrides.
 
 ```python
 >>> from wintermute import *
