@@ -41,7 +41,12 @@ class Peripheral:
         pass
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class UART(Peripheral):
@@ -74,6 +79,3 @@ class UART(Peripheral):
             self.gnd = pins["gnd"]
 
         super().__init__(name, pins, pType)
-
-    def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from wintermute.core import Device, Operation, User
+from wintermute.core import Analyst, AWSAccount, Device, Operation, User, Vulnerability
 
 """
 Operation test cases
@@ -95,7 +95,7 @@ Device test cases
 
 @pytest.fixture
 def device() -> Device:
-    """pytest fixture to create a Device isntance for testing."""
+    """pytest fixture to create a Device instance for testing."""
     return Device(
         hostname="devicetest",
         macaddr="aa:bb:cc:dd:ee:ff",
@@ -125,3 +125,120 @@ def test_device_tojson(device: Device) -> None:
     assert tojson["macaddr"] == device.macaddr
     assert tojson["operatingsystem"] == device.operatingsystem
     assert tojson["ipaddr"] == str(device.ipaddr)
+
+
+"""
+Analyst test cases
+"""
+
+
+@pytest.fixture
+def analyst() -> Analyst:
+    """pytest fixture to create an Analyst instance for testing."""
+    return Analyst(name="Test User", userid="testusr", email="testusr@test.com")
+
+
+def test_analyst_creation(analyst: Analyst) -> None:
+    """Test the creation of the Analyst instance."""
+    assert analyst.name == "Test User"
+    assert analyst.userid == "testusr"
+    assert analyst.email == "testusr@test.com"
+
+
+def test_analyst_tojson(analyst: Analyst) -> None:
+    """Test the toJSON() function for the Analyst instance"""
+    tojson = json.loads(
+        '{\n    "email": "testusr@test.com",\n    "name": "Test User",\n    "userid": "testusr"\n}'
+    )
+
+    assert analyst.name == tojson["name"]
+    assert analyst.userid == tojson["userid"]
+    assert analyst.email == tojson["email"]
+
+
+"""
+Vulnerability test cases
+"""
+
+
+@pytest.fixture
+def vulnerability() -> Vulnerability:
+    """pytest fixture to create a Vulnerability instance for testing."""
+    return Vulnerability(
+        title="Test Vuln",
+        description="This is a test vulnerability",
+        threat="If it breaks then the package won't work",
+        cvss=8,
+        mitigation=False,
+        fix=True,
+        fix_desc="Make sure you have test cases for all",
+        mitigation_desc="There are no mitigations",
+        verified=True,
+    )
+
+
+def test_vulnerability_creation(vulnerability: Vulnerability) -> None:
+    """Test the creation of the Vulnerability object."""
+    assert vulnerability.title == "Test Vuln"
+    assert vulnerability.description == "This is a test vulnerability"
+    assert vulnerability.threat == "If it breaks then the package won't work"
+    assert vulnerability.cvss == 8
+    assert vulnerability.mitigation is False
+    assert vulnerability.fix is True
+    assert vulnerability.fix_desc == "Make sure you have test cases for all"
+    assert vulnerability.verified is True
+
+
+def test_vulnerability_tojson(vulnerability: Vulnerability) -> None:
+    """Test the toJSON() function for the Vulnerability instance"""
+    tojson = json.loads(
+        '{\n    "cvss": 8,\n    "description": "This is a test vulnerability",\n    \
+                        "fix": true,\n    "fix_desc": "Make sure you have test cases for all",\n    \
+                        "mitigation": false,\n    "mitigation_desc": "There are no mitigations",\n   \
+                        "reproduction_steps": [],\n    "risk": {\n        "impact": "Low",\n        \
+                        "likelihood": "Low",\n        "severity": "Low"\n    },\n    \
+                        "threat": "If it breaks then the package won\'t work",\n    \
+                        "title": "Test Vuln",\n    "verified": true\n}'
+    )
+
+    assert vulnerability.title == tojson["title"]
+    assert vulnerability.description == tojson["description"]
+    assert vulnerability.cvss == tojson["cvss"]
+    assert vulnerability.fix is True
+    assert vulnerability.fix_desc == tojson["fix_desc"]
+    assert vulnerability.threat == tojson["threat"]
+
+
+"""
+AWSAccount test cases
+"""
+
+
+@pytest.fixture
+def awsaccount() -> AWSAccount:
+    """pytest fixture to create an AWSAccount instance for testing."""
+    return AWSAccount(
+        accountId="00112233445566778899",
+        name="Test AWS Account",
+        description="This is a stub for an AWS account for testing",
+    )
+
+
+def test_awsaccount_creation(awsaccount: AWSAccount) -> None:
+    """Test the creation of the AWSAccount objecct."""
+    assert awsaccount.accountId == "00112233445566778899"
+    assert awsaccount.name == "Test AWS Account"
+    assert awsaccount.description == "This is a stub for an AWS account for testing"
+
+
+def test_awsaccount_tojson(awsaccount: AWSAccount) -> None:
+    """Test the toJSON() function for the AWSAccount instance"""
+    tojson = json.loads(
+        '{\n    "accountId": "00112233445566778899",\n    \
+                        "description": "This is a stub for an AWS account for testing",\n    \
+                        "name": "Test AWS Account",\n    "vulnerabilities": []\n}'
+    )
+
+    assert awsaccount.accountId == tojson["accountId"]
+    assert awsaccount.name == tojson["name"]
+    assert awsaccount.description == tojson["description"]
