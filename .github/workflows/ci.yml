@@ -74,6 +74,6 @@ jobs:
         run: hatch run coverage report
       - name: Build Python package
         run: hatch build
-      - name: Publish Python package to PyPI
-        if: github.ref_type == 'tag' && matrix.python-version == '3.13'
-        run: hatch publish -n -u __token__ -a ${{ secrets.PYPI_TOKEN }}
+#      - name: Publish Python package to PyPI
+#        if: github.ref_type == 'tag' && matrix.python-version == '3.13'
+#        run: hatch publish -n -u __token__ -a ${{ secrets.PYPI_TOKEN }}
