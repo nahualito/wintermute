@@ -256,7 +256,7 @@ class Device:
         hostname: str = "",
         ipaddr: Union[
             ipaddress.IPv4Address, ipaddress.IPv6Address
-        ] = ipaddress.ip_address("localhost"),
+        ] = ipaddress.ip_address("127.0.0.1"),
         macaddr: str = "",
         operatingsystem: str = "",
         fqdn: str = "",
@@ -295,7 +295,7 @@ class Device:
         pass
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(self, default=lambda o: o.__dict__ if '__dict__' in dir(o) else str(o), sort_keys=True, indent=4)
 
 
 class User:
@@ -440,7 +440,6 @@ class Operation:
         analysts: list[Analyst] = [],
         ticket: str = "",
         devices: list[Device] = [],
-        db: TinyDB = TinyDB("onoSendai.json"),
         end_date: str = datetime.today().strftime("%m/%d/%Y"),
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
         users: list[User] = [],
@@ -513,7 +512,7 @@ class Operation:
         hostname: str = "",
         ipaddr: Union[
             ipaddress.IPv4Address, ipaddress.IPv6Address
-        ] = ipaddress.ip_address("localhost"),
+        ] = ipaddress.ip_address("127.0.0.1"),
         macaddr: str = "",
         operatingsystem: str = "",
         fqdn: str = "",
