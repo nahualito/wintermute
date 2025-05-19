@@ -61,7 +61,6 @@ class Operation {
 }
 class Pentest {
 + Application
-+ ANVIL
 + dataClassification
 + loadPentest()
 + save()
@@ -214,7 +213,7 @@ wintermute.with_default_category(
 ## wintermute
 
 The following classes and functions are the main entry point for wintermute,
-the PRSSec OST offensive Deck.
+The hardware offensive prototyper Deck.
 
 Cartridges are to be dropped in the cartridges folder and internal classes
 should be dropped into the core file.
