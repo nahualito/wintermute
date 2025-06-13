@@ -441,7 +441,7 @@ class Operation:
 
     def __init__(
         self,
-        operation_name: str = "onoSendai",
+        operation_name: str = "Wintermute",
         analysts: list[Analyst] = [],
         ticket: str = "",
         devices: list[Device] = [],

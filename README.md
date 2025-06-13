@@ -151,7 +151,6 @@ The current modules are:
 
 - Kalamari: Intelligence gathering
 - NestingPet: Penetration Testing module
-- tCorp: Ticketing system module, it can search, comment, change status and create tickets.
 - bluefalcon: Reporting module, it'll create an operational report for the output of the red team operation, including intelligence gathering, output can be a word document or an excel document.
 
 ## User requirements
@@ -213,7 +212,7 @@ wintermute.with_default_category(
 ## wintermute
 
 The following classes and functions are the main entry point for wintermute,
-The hardware offensive prototyper Deck.
+The hardware offensive framework for fast exploit prototypes Deck.
 
 Cartridges are to be dropped in the cartridges folder and internal classes
 should be dropped into the core file.
@@ -236,7 +235,7 @@ alias  help     macro  run_pyscript  set    shortcuts
 edit   history  quit   run_script    shell  unload
 
 wintermute> load
-Usage: unload [-h] {sshodan, kalamari, DrCiml, tcorp}
+Usage: unload [-h] {sshodan, kalamari, DrCiml, nestingpet}
 Error: the following arguments are required: cmds
 
 wintermute> quit
