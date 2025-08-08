@@ -19,7 +19,7 @@ class TestPeripheral(unittest.TestCase):
         p = Peripheral(name="eth0", pins={"tx": 1}, pType=PeripheralType.Ethernet)
         json_str = p.toJSON()
         self.assertIn('"name": "eth0"', json_str)
-        self.assertIn('"pType": 2', json_str)  # Ethernet is 0x02
+        self.assertIn('"pType": "Ethernet"', json_str)  # Ethernet is 0x02
         self.assertIn('"pins": {', json_str)
 
 
@@ -38,8 +38,6 @@ class TestUART(unittest.TestCase):
         self.assertEqual(u.tx, "PA1")
         self.assertEqual(u.rx, "PA2")
         self.assertEqual(u.gnd, "GND")
-
-
 class TestTPM(unittest.TestCase):
     def test_tpm_pin_assignment(self) -> None:
         pins = {
