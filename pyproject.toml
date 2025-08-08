@@ -17,6 +17,12 @@ dependencies = [
   "ipaddress",
   "tinydb",
   "pyserial",
+  "cmd2",
+  "argparse",
+  "importlib",
+  "typing",
+  "logging",
+  "datetime"
 ]
 description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]
@@ -39,6 +45,9 @@ tests = [
   "pytest>=8.1.1,<9",
   "pytest-mock>=3,<4",
 ]
+
+[project.scripts]
+wintermute = "wintermute.WintermuteREPL:main"
 
 [tool.coverage.report]
 exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]

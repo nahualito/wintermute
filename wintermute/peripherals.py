@@ -72,6 +72,7 @@ class UART(Peripheral):
         self.bytesize = bytesize
         self.parity = parity
         self.stopbits = stopbits
+        self.pType = pType
         self.com_port = (
             comPort  # Port connected to the user's device to speak to the UART
         )
@@ -126,7 +127,7 @@ class TPM(Peripheral):
         self,
         name: str = "",
         pins: Dict[Any, Any] = {},
-        pType: PeripheralType = PeripheralType.Unknown,
+        pType: PeripheralType = PeripheralType.TPM,
     ) -> None:
         self.mosi: str = ""
         self.miso: str = ""
@@ -136,6 +137,7 @@ class TPM(Peripheral):
         self.rst: str = ""
         self.pirq: str = ""
         self.vcc: str = ""
+        self.pType = pType
         if pins:
             self.mosi = pins["mosi"] if pins["mosi"] else ""
             self.miso = pins["miso"] if pins["miso"] else ""
@@ -150,18 +152,48 @@ class TPM(Peripheral):
 
     def _tpm_input_header(self, tag: int, len: int, code: int) -> bytes:
         """10 byte header that will prepend every command sent from the host to the TPM"""
-        return struct.pack("HII", tag, len, code)
+        return struct.pack(">HII", tag, len, code)
 
     def _tpm_output_header(self, tag: int, len: int, code: int) -> bytes:
         """10 byte header that will prepend every command sent from the TPM to the host"""
-        return struct.pack("HII", tag, len, code)
+        return struct.pack(">HII", tag, len, code)
+
+    # -------------------------------------------------
+    # PCR Read
+    # -------------------------------------------------
 
     def _tpm_pcr_read_req_body(self, pcr_index: int = 0) -> bytes:
-        return struct.pack("I", pcr_index)
+        return struct.pack(">I", pcr_index)
 
     def _tpm_pcr_read_resp_body(self, out_digest: bytes) -> bytes:
-        return struct.pack("20s", out_digest)
+        return struct.pack(">20s", out_digest)
+
+    # -------------------------------------------------
+    # PCR Extend
+    # -------------------------------------------------
 
     def _tpm_pcr_extend_req_body(self, pcr_index: int, in_digest: bytes) -> bytes:
         """PCR Extend"""
-        return struct.pack("I20s", pcr_index, in_digest)
+        return struct.pack(">I20s", pcr_index, in_digest)
+
+    def _tpm_pcr_extend_resp_body(self, out_digest: bytes) -> bytes:
+        return struct.pack(">20s", out_digest)
+
+    # -------------------------------------------------
+    # Get Random
+    # -------------------------------------------------
+
+    def _tpm_get_rnd_req_body(self, num_bytes: int) -> bytes:
+        return struct.pack(">I", num_bytes)
+
+    def _tpm_get_rnd_resp_body(
+        self, random_bytes_size: int, random_bytes: bytes
+    ) -> bytes:
+        return struct.pack(">I128s", random_bytes_size, random_bytes)
+
+    # -------------------------------------------------
+    # Set Operator Auth
+    # -------------------------------------------------
+
+    def _tpm_op_auth_req_body(self, operator_auth: bytes) -> bytes:
+        return struct.pack(">20s", operator_auth)

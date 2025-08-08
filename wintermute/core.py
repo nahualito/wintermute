@@ -32,7 +32,12 @@ class ReproductionStep:
         pass
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class Vulnerability:
@@ -73,7 +78,12 @@ class Vulnerability:
         self.risk.severity = severity
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class Risk:
@@ -96,7 +106,12 @@ class Risk:
         self.severity = severity
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class AWSAccount:
@@ -158,7 +173,12 @@ class AWSAccount:
             self.vulnerabilities.append(v)
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class Service:
@@ -225,7 +245,12 @@ class Service:
             self.vulnerabilities.append(v)
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class Device:
@@ -356,7 +381,12 @@ class User:
         pass
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class Analyst:
@@ -367,13 +397,13 @@ class Analyst:
 
     Examples:
         >>> import core
-        >>> r = core.Analyst("Enrique Sanchez", "saenri", "saenri@amazon.com")
+        >>> r = core.Analyst("Enrique Sanchez", "nahual", "nahual@exploit.ninja")
         >>> r.name
         'Enrique Sanchez'
         >>> r.email
-        'saenri@amazon.com'
+        'nahual@exploit.ninja'
         >>> r.userid
-        'saenri'
+        'nahual'
 
     Attributes:
         * name (str): Name of the analyst.
@@ -416,7 +446,12 @@ class Analyst:
         return True if not None else False
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            sort_keys=True,
+            indent=4,
+        )
 
 
 class Operation:
@@ -450,6 +485,7 @@ class Operation:
         users: list[User] = [],
         operation_id: str = str(uuid.uuid1()),
         awsaccounts: list[AWSAccount] = [],
+        db: str = "",
     ) -> None:
         self.operation_name = operation_name
         self.db = TinyDB(f"{operation_name}.json")
@@ -563,7 +599,11 @@ class Operation:
         pass
 
     def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
+            indent=4,
+        )
 
 
 class Pentest(Operation):
@@ -587,7 +627,7 @@ class Pentest(Operation):
         dataClassification: str = "",
         testEnvironment: str = "",
         ApplicationName: str = "DefaultApp",
-        db: TinyDB = TinyDB("onoSendai.json"),
+        db: TinyDB = TinyDB("Wintermute.json"),
         devices: list[Device] = [],
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
         end_date: str = datetime.today().strftime("%m/%d/%Y"),
@@ -653,6 +693,3 @@ class Pentest(Operation):
             json.loads(self.toJSON()), Query().operation_name == self.operation_name
         )
         pass
-
-    def toJSON(self) -> str:
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
