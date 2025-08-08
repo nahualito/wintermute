@@ -38,6 +38,8 @@ class TestUART(unittest.TestCase):
         self.assertEqual(u.tx, "PA1")
         self.assertEqual(u.rx, "PA2")
         self.assertEqual(u.gnd, "GND")
+
+
 class TestTPM(unittest.TestCase):
     def test_tpm_pin_assignment(self) -> None:
         pins = {
