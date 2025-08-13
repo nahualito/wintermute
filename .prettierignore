@@ -3,3 +3,4 @@
 htmlcov
 public
 site
+wintermute/.mypy_cache

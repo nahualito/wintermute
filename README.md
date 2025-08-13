@@ -1,3 +1,5 @@
+[![ci](https://github.com/nahualito/wintermute/actions/workflows/ci.yml/badge.svg)](https://github.com/nahualito/wintermute/actions/workflows/ci.yml)
+
 ![](docs/assets/images/Cthuluh_beer.png)
 
 # Welcome to wintermute’s documentation!
