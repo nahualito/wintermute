@@ -149,9 +149,7 @@ class Team {
 
 The current modules are:
 
-- Kalamari: Intelligence gathering
-- NestingPet: Penetration Testing module
-- bluefalcon: Reporting module, it'll create an operational report for the output of the red team operation, including intelligence gathering, output can be a word document or an excel document.
+- tpm20: TPM 2.0 library to talk and setup fuzzing for the TPMs
 
 ## User requirements
 
