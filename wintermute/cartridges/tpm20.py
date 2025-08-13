@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
 # pragma pylint: disable=unused-argument, no-self-use, line-too-long
 
+import datetime
 import struct
 from enum import Enum, unique
-import logging
-from cmd2 import CommandSet, with_argparser, with_category, with_default_category, Cmd2ArgumentParser
-import datetime
-event_timestamp = str(datetime.datetime.utcnow()).split('.')[0].replace(' ', '_').replace(':', '-')
+
+from cmd2 import (
+    Cmd2ArgumentParser,
+    CommandSet,
+    with_argparser,
+    with_default_category,
+)
+
+event_timestamp = (
+    str(datetime.datetime.utcnow()).split(".")[0].replace(" ", "_").replace(":", "-")
+)
+
 
 class TPM_register(Enum):
     TPM_ACCESS = 0x0000
@@ -117,6 +126,7 @@ class TPMCommandBuilder:
         )
         return header + parameters
 
+
 @with_default_category("tpm20")
 class tpm20(CommandSet):
     """
@@ -145,14 +155,18 @@ class tpm20(CommandSet):
     def read_public(self, handle: int) -> bytes:
         param = struct.pack(">I", handle)
         return self.execute(TPMCommands.TPMCommands_ReadPublic, param)
-    
+
     """REPL commands added here for console use"""
     tpm20_parser = Cmd2ArgumentParser()
-    tpm20_parser.add_argument('-p', '--public', action='store_true', help='Retrieve publi key from the TPM')
-    tpm20_parser.add_argument('-r', '--random', action='store_true', help='Get random bytes from the TPM')
+    tpm20_parser.add_argument(
+        "-p", "--public", action="store_true", help="Retrieve publi key from the TPM"
+    )
+    tpm20_parser.add_argument(
+        "-r", "--random", action="store_true", help="Get random bytes from the TPM"
+    )
 
     @with_argparser(tpm20_parser)
-    def do_tpm20(self, args: Cmd2ArgumentParser) -> None:
+    def do_tpm20(self, args) -> None:  # type: ignore
         """
         Execute TPM commands.
         Use -p to read public key, -r to get random bytes.
@@ -160,3 +174,4 @@ class tpm20(CommandSet):
         if args.public:
             handle = 0x81000000  # Example handle, replace with actual
             public_key = self.read_public(handle)
+            print(public_key.hex())
