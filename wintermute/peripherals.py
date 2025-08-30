@@ -10,10 +10,11 @@ to give access to hardware peripherals and have more abstraction for automation
 and attacking.
 """
 
-import json
 import struct
 from enum import Enum
 from typing import Any, Dict
+
+from .core import BaseModel
 
 
 class PeripheralType(Enum):
@@ -30,29 +31,73 @@ class PeripheralType(Enum):
     TPM = 0x0A
 
 
-class Peripheral:
+class Peripheral(BaseModel):
+    """Base class for all peripherals
+    
+    Examples:
+        >>> p = Peripheral()
+        >>> p.name = "MyPeripheral"
+        >>> p.pType = PeripheralType.UART
+        >>> p.pins = {"tx": "P1", "rx": "P2", "gnd": "GND"}
+        >>> print(p)
+        name='MyPeripheral' pins={'tx': 'P1', 'rx': 'P2', 'gnd': 'GND'} pType=<PeripheralType.UART: 1>
+
+    Attributes:
+        name (str): Name of the peripheral
+        pins (Dict[Any, Any]): Dictionary of pin names to their values
+        pType (PeripheralType): Type of the peripheral    
+    """
     def __init__(
         self,
         name: str = "",
-        pins: Dict[Any, Any] = {},
-        pType: PeripheralType = PeripheralType.Unknown,
+        pins: Dict[Any, Any] | None = None,
+        pType: PeripheralType | str | int = PeripheralType.Unknown,
     ) -> None:
         self.name = name
-        self.pins = pins
-        self.pType = pType
-        pass
-
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
+        self.pins = dict(pins) if pins else {}
+        if isinstance(pType, PeripheralType):
+            self.pType = pType
+        elif isinstance(pType, str):
+            try:
+                self.pType = PeripheralType[pType]
+            except KeyError:
+                self.pType = PeripheralType.Unknown
+        elif isinstance(pType, int):
+            try:
+                self.pType = PeripheralType(pType)
+            except ValueError:
+                self.pType = PeripheralType.Unknown
+        else:
+            self.pType = PeripheralType.Unknown
 
 
 class UART(Peripheral):
-    """Class that defines the UART interface"""
+    """Class that defines the UART interface
+    
+    Examples:
+        >>> pins = {"tx": "P1", "rx": "P2", "gnd": "GND"}
+        >>> u = UART(name="dbg", pins=pins, comPort="/dev/ttyUSB0")
+        >>> print(u)
+        name='dbg' pins={'tx': 'P1', 'rx': 'P2', 'gnd': 'GND'} pType=<PeripheralType.UART: 1>
+        >>> print(u.tx, u.rx, u.gnd)
+        P1 P2 GND
+        >>> print(u.baudrate, u.bytesize, u.parity, u.stopbits)
+        9600 8 N 1
+
+    Attributes:
+        name (str): Name of the peripheral
+        pins (Dict[Any, Any]): Dictionary of pin names to their values
+        pType (PeripheralType): Type of the peripheral
+        tx (str): Pin name for TX
+        rx (str): Pin name for RX
+        gnd (str): Pin name for GND
+        baudrate (int): Baud rate for UART communication
+        bytesize (int): Number of data bits
+        parity (str): Parity bit setting ('N', 'E', 'O')
+        stopbits (int): Number of stop bits
+        com_port (str): Port connected to the user's device to speak to the UART
+    
+    """
 
     def __init__(
         self,
@@ -121,7 +166,29 @@ class TPM_interposer_commands(Enum):
 
 
 class TPM(Peripheral):
-    """Class that defines a TPM peripheral"""
+    """Class that defines a TPM peripheral
+    
+    Examples:
+        >>> pins = {"mosi": "P1", "miso": "P2", "sclk": "P3", "gnd": "GND", "cs": "P4", "rst": "P5", "pirq": "P6", "vcc": "VCC"}
+        >>> tpm = TPM(name="tpm1", pins=pins)
+        >>> print(tpm)
+        name='tpm1' pins={'mosi': 'P1', 'miso': 'P2', 'sclk': 'P3', 'gnd': 'GND', 'cs': 'P4', 'rst': 'P5', 'pirq': 'P6', 'vcc': 'VCC'} pType=<PeripheralType.TPM: 10>
+        >>> print(tpm.mosi, tpm.miso, tpm.sclk, tpm.gnd, tpm.cs, tpm.rst, tpm.pirq, tpm.vcc)
+        P1 P2 P3 GND P4 P5 P6 VCC
+
+    Attributes:
+        name (str): Name of the peripheral
+        pins (Dict[Any, Any]): Dictionary of pin names to their values
+        pType (PeripheralType): Type of the peripheral
+        mosi (str): Pin name for MOSI
+        miso (str): Pin name for MISO
+        sclk (str): Pin name for SCLK
+        gnd (str): Pin name for GND
+        cs (str): Pin name for CS
+        rst (str): Pin name for RST
+        pirq (str): Pin name for PIRQ
+        vcc (str): Pin name for VCC    
+    """
 
     def __init__(
         self,
@@ -129,6 +196,13 @@ class TPM(Peripheral):
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.TPM,
     ) -> None:
+        """Initialize TPM peripheral with pin mappings and type.
+        
+        Args:
+            name (str): Name of the TPM peripheral.
+            pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
+            pType (PeripheralType): Type of the peripheral, defaults to PeripheralType.TPM. 
+        """
         self.mosi: str = ""
         self.miso: str = ""
         self.sclk: str = ""

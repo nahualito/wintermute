@@ -2,6 +2,8 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/release/python-3130/)
+
+
 ![](docs/assets/images/Cthuluh_beer.png)
 
 # Welcome to wintermute’s documentation!
@@ -14,7 +16,7 @@ Access to console can be done from the `wintermuteConsole` executable
 ./wintermuteConsole
 ```
 
-Docker command line is
+If you want to run in a Docker, the command line is
 
 ```bash
 docker run -it --rm -v $(pwd):/opt/wintermute

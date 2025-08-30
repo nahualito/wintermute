@@ -9,36 +9,76 @@ This file contains the core classes for the onoSendai deck, these are not going 
 to the deck, they are for internal deck use.
 """
 
+import inspect
 import ipaddress
 import json
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Self, Sequence
+from enum import Enum
+from typing import Any, Callable, Dict, Self, Sequence, Type
 
 from tinydb import TinyDB
 
 
-def _jsonify(value: Any) -> Any:
-    if isinstance(value, BaseModel):
-        return value.to_dict()
-    if isinstance(value, list):
-        return [_jsonify(v) for v in value]
-    if isinstance(value, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
-        return str(value)
-    return value
-
-
 class BaseModel:
+    """Base class for all models to provide common functionality.
+
+    This class provides common functionality for all models, including serialization
+    to/from dict, equality comparison, and hashing.
+
+    Examples:
+        >>> import core
+        >>> r = core.Risk(likelihood="High", impact="High", severity="Critical")
+        >>> d = r.to_dict()
+        >>> d["severity"]
+        'Critical'
+        >>> r2 = core.Risk.from_dict(d)
+        >>> r == r2
+        True
+
+    Attributes:
+        * __schema__ (dict): Schema defining sub-objects for serialization/deserialization
+    """
+
     __schema__: dict[str, Any] = {}
+
+    JSON_ADAPTERS: Dict[Type[Any], Callable[[Any], Any]] = {
+        ipaddress.IPv4Address: str,
+        ipaddress.IPv6Address: str,
+    }
+
+    @staticmethod
+    def _jsonify(value: Any) -> Any:
+        """Default recursive serializer used by to_dict()."""
+        if isinstance(value, BaseModel):
+            return value.to_dict()
+        if isinstance(value, list):
+            return [BaseModel._jsonify(v) for v in value]
+        if isinstance(value, Enum):
+            return value.name
+        # Built-in adapters
+        for typ, adapter in BaseModel.JSON_ADAPTERS.items():
+            if isinstance(value, typ):
+                return adapter(value)
+        # Let subclasses try custom conversions
+        extra = BaseModel._jsonify_extra(value)
+        if extra is not None:
+            return extra
+        return value
+
+    @staticmethod
+    def _jsonify_extra(value: Any) -> Any:
+        """Hook for subclasses to override when they need custom conversions.
+        Return None to indicate 'not handled'."""
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k, v in self.__dict__.items():
-            # Skip private attrs and DB handles
-            if k.startswith("_") or isinstance(v, TinyDB):
-                continue
-            out[k] = _jsonify(v)
+            if k.startswith("_"):
+                continue  # skip private/internal fields (e.g., DB handles)
+            out[k] = BaseModel._jsonify(v)
         return out
 
     @classmethod
@@ -46,34 +86,53 @@ class BaseModel:
         if not isinstance(data, dict):
             raise TypeError(f"Expected dict for {cls.__name__}, got {type(data)}")
 
-        kwargs: dict[str, Any] = {}
+        # 1) Normalize nested fields declared in __schema__ (dicts -> objects, lists -> list[objects])
+        normalized: dict[str, Any] = {}
         schema = getattr(cls, "__schema__", {})
 
         for key, val in data.items():
             if key in schema:
                 subcls = schema[key]
                 if isinstance(val, list):
-                    normalized = []
+                    out_list = []
                     for v in val:
                         if isinstance(v, dict):
-                            normalized.append(subcls.from_dict(v))
+                            out_list.append(subcls.from_dict(v))
                         elif isinstance(v, subcls):
-                            normalized.append(v)
+                            out_list.append(v)
                         else:
                             raise TypeError(
                                 f"Unexpected type in list for {key}: {type(v)}"
                             )
-                    kwargs[key] = normalized
+                    normalized[key] = out_list
                 elif isinstance(val, dict):
-                    kwargs[key] = subcls.from_dict(val)
+                    normalized[key] = subcls.from_dict(val)
                 elif isinstance(val, subcls):
-                    kwargs[key] = val
+                    normalized[key] = val
                 else:
                     raise TypeError(f"Unexpected type for {key}: {type(val)}")
             else:
-                kwargs[key] = val
+                normalized[key] = val
 
-        return cls(**kwargs)
+        # 2) Only pass kwargs that the constructor actually accepts
+        sig = inspect.signature(cls)
+        accepted_names = {
+            p.name
+            for p in sig.parameters.values()
+            if p.kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        ctor_kwargs = {k: v for k, v in normalized.items() if k in accepted_names}
+
+        # 3) Construct
+        obj = cls(**ctor_kwargs)
+
+        # 4) Set any remaining fields (derived attrs like tx/rx/gnd, mosi/miso/etc.)
+        for k, v in normalized.items():
+            if k not in ctor_kwargs:
+                setattr(obj, k, v)
+
+        return obj
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, self.__class__) and self.to_dict() == other.to_dict()
@@ -83,7 +142,34 @@ class BaseModel:
 
 
 class ReproductionStep(BaseModel):
-    """This class holds a reproduction step for vulnerabilities"""
+    """This class holds a reproduction step for vulnerabilities
+
+    This class holds a reproduction step for vulnerabilities, it can contain
+    the tool used, action taken, confidence level and arguments passed to the tool.
+
+    Examples:
+        >>> import core
+        >>> rs = core.ReproductionStep(
+        ...     tool="nmap",
+        ...     action="scan",
+        ...     confidence=5,
+        ...     arguments=["-sV", "-script=vuln"],
+        ... )
+        >>> print(rs.tool)
+        nmap
+        >>> print(rs.confidence)
+        5
+        >>> print(rs.arguments)
+        ['-sV', '-script=vuln']
+
+    Attributes:
+        * tool (str): Tool used in the reproduction step
+        * action (str): Action taken in the reproduction step
+        * confidence (int): Confidence level of the reproduction step (0-10)
+        * arguments (array): Array of arguments passed to the tool
+        * vulnOutput (str): Output from the vulnerability scan
+        * fixOutput (str): Output from the fix attempt
+    """
 
     def __init__(self) -> None:
         self.tool = None
@@ -101,6 +187,16 @@ class Risk(BaseModel):
     This class defines the risk for the vulnerability is assigned to, is designed to
     be used by a vulnerability itself
 
+    Examples:
+        >>> import core
+        >>> r = core.Risk(likelihood="High", impact="High", severity="Critical")
+        >>> print(r.severity)
+        Critical
+        >>> print(r.likelihood)
+        High
+        >>> print(r.impact)
+        High
+
     Attributes:
         * likelihood (str): Likelihood of the vulnerability
         * impact (str): Impact of the vulnerability
@@ -116,7 +212,38 @@ class Risk(BaseModel):
 
 
 class Vulnerability(BaseModel):
-    """This class holds a vulnerability found"""
+    """This class holds a vulnerability found
+
+    This class holds a vulnerability found during the operation, it can contain
+    reproduction steps and a risk object.
+
+    Examples:
+        >>> import core
+        >>> v = core.Vulnerability(
+        ...     title="CVE-2020-1234", description="Example vuln", cvss=7
+        ... )
+        >>> print(v.title)
+        CVE-2020-1234
+        >>> print(v.cvss)
+        7
+        >>> v.setRisk(likelihood="High", impact="High", severity="Critical")
+        >>> print(v.risk.severity)
+        Critical
+
+    Attributes:
+        * title (str): Title of the vulnerability
+        * description (str): Description of the vulnerability
+        * threat (str): Threat posed by the vulnerability
+        * cvss (int): CVSS score of the vulnerability
+        * mitigation (bool): Whether there is a mitigation available
+        * fix (bool): Whether there is a fix available
+        * fix_desc (str): Description of the fix
+        * mitigation_desc (str): Description of the mitigation
+        * risk (Risk): Risk object associated with the vulnerability
+        * verified (bool): Whether the vulnerability has been verified
+        * reproduction_steps (array): Array of ReproductionStep objects detailing how to reproduce the vuln
+
+    """
 
     __schema__ = {
         "risk": Risk,
@@ -165,6 +292,27 @@ class Service(BaseModel):
     """This class holds the network port objects
 
     This class holds the network port objects and will allow to track states, versions and vulns.
+
+    Examples:
+        >>> import core
+        >>> s = core.Service(
+        ...     protocol="ipv4",
+        ...     app="nginx",
+        ...     portNumber=80,
+        ...     banner="nginx 1.18",
+        ...     transport_layer="HTTP",
+        ... )
+        >>> s.portNumber
+        80
+        >>> s.app
+        'nginx'
+        >>> s.addVulnerability(
+        ...     title="CVE-2020-1234", description="Example vuln", cvss=7
+        ... )
+        >>> len(s.vulnerabilities)
+        1
+        >>> s.vulnerabilities[0].title
+        'CVE-2020-1234'
 
     Attributes:
         * protocol (str): Transport protocol (ipv4/ipv6)
@@ -303,7 +451,33 @@ class Device(BaseModel):
 
 
 class User(BaseModel):
-    """This class holds the user object."""
+    """This class holds the user object.
+
+    This class holds the user object, it can contain multiple desktops
+    associated with the user, it can also contain LDAP groups and teams
+    the user belongs to.
+
+    Examples:
+        >>> import core
+        >>> u = core.addUser(
+        ...     uid="jsmith", name="John Smith", email="john@example.com", teams=["Red"]
+        ... )
+        >>> print(u.email)
+        john@example.com
+        >>> print(u.teams)
+        ['Red']
+
+    Attributes:
+        * uid (str): Unique ID for the user
+        * name (str): Name of the user
+        * email (str): Email address of the user
+        * dept (str): Department the user belongs to
+        * permissions (array): Array of permissions the user has
+        * override_reason (str): Reason for overriding permissions
+        * desktops (array): Array of Device objects representing the user's desktops
+        * ldap_groups (array): Array of LDAP groups the user belongs to
+        * teams (array): Array of teams the user belongs to
+    """
 
     __schema__ = {
         "desktops": Device,
@@ -338,8 +512,6 @@ class User(BaseModel):
                 if team not in self.teams:
                     self.teams.append(team)
 
-    # -------- Normalized adders --------
-
     def addDesktop(
         self, hostname: str, ipaddr: str, macaddr: str, operatingsystem: str, fqdn: str
     ) -> bool:
@@ -351,8 +523,30 @@ class User(BaseModel):
 
 
 class AWSAccount(BaseModel):
-    """
-    This class represents an AWS Account that may contain users and vulnerabilities.
+    """This class represents an AWS Account that may contain users and vulnerabilities.
+
+    This class represents an AWS Account that may contain users and vulnerabilities,
+    this class was not designed to be called by itself, it should be called from
+    Operation for it's management
+
+    Examples:
+        >>> import core
+        >>> r = core.AWSAccount(
+        ...     "111122223333", "Prod Account", "This is the prod account"
+        ... )
+        >>> r.accountId
+        '111122223333'
+        >>> r.name
+        'Prod Account'
+        >>> r.description
+        'This is the prod account'
+
+    Attributes:
+        * accountId (str): AWS Account ID
+        * name (str): Name of the AWS Account
+        * description (str): Description of the AWS Account
+        * vulnerabilities (array): Array of Vulnerability objects associated with the AWS Account
+        * users (array): Array of User objects associated with the AWS Account
     """
 
     __schema__ = {
@@ -389,8 +583,6 @@ class AWSAccount(BaseModel):
                     self.users.append(User.from_dict(u))
                 elif isinstance(u, User):
                     self.users.append(u)
-
-    # -------- Normalized adders --------
 
     def addVulnerability(
         self,
@@ -512,6 +704,25 @@ class Operation(BaseModel):
     these classes will not have the automation capabilities added as incident, but they can be called for more
     flexibility on this library.
 
+    Examples:
+        >>> from wintermute import core
+        >>> op = core.Operation("testOp")
+        >>> op.addAnalyst("Alice", "aalice", "alice@example.com")
+        True
+        >>> op.addDevice(
+        ...     "host1", "192.168.1.10", "aa:bb:cc:dd:ee:ff", "Linux", "host1.local"
+        ... )
+        True
+        >>> op.addUser(
+        ...     uid="jsmith", name="John Smith", email="john@example.com", teams=["Red"]
+        ... )
+        True
+        >>> op.addAWSAccount(
+        ...     accountId="111122223333", name="Prod", description="Prod account"
+        ... )
+        True
+        >>> op.save()
+
     Attributes:
         * operation_name (str): Name of the operation.
         * uuid (str): Generated UUID for the UUID, based on host ID and current time.
@@ -581,6 +792,7 @@ class Operation(BaseModel):
             self.db = TinyDB(f"{value}.json")
 
     def addAnalyst(self, name: str, userid: str, email: str) -> bool:
+        """Add an analyst to the operation"""
         a = Analyst(name, userid, email)
         if a not in self.analysts:
             self.analysts.append(a)
@@ -590,6 +802,7 @@ class Operation(BaseModel):
     def addDevice(
         self, hostname: str, ipaddr: str, macaddr: str, operatingsystem: str, fqdn: str
     ) -> bool:
+        """Add a device to the operation"""
         d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
         if d not in self.devices:
             self.devices.append(d)
@@ -606,6 +819,7 @@ class Operation(BaseModel):
         permissions: list[str] | None = None,
         override_reason: str = "",
     ) -> bool:
+        """Add a user to the operation"""
         u = User(
             uid=uid,
             name=name,
@@ -621,6 +835,7 @@ class Operation(BaseModel):
         return False
 
     def addAWSAccount(self, accountId: str, name: str, description: str = "") -> bool:
+        """Add an AWS Account to the operation"""
         a = AWSAccount(accountId, name, description)
         if a not in self.awsaccounts:
             self.awsaccounts.append(a)
@@ -628,12 +843,14 @@ class Operation(BaseModel):
         return False
 
     def save(self) -> None:
+        """Save the operation to the TinyDB database"""
         db = TinyDB(f"{self.operation_name}.json")
         db.drop_tables()
         db.insert(self.to_dict())
         db.close()
 
     def load(self) -> None:
+        """Load the operation from the TinyDB database"""
         db = TinyDB(f"{self.operation_name}.json")
         saved = db.all()[0]
         db.close()
@@ -642,10 +859,29 @@ class Operation(BaseModel):
 
 
 class Pentest(Operation):
-    """Pentest class
+    """This class contains the information about the pentest including devices, analysts and name of the pentest.
 
-    This class inherits from the Operation class (The main and original class) extending things such as the ANVIL appId,
+    This class inherits from the Operation class (The main and original class) extending things such as the Application Name,
     the application id, the classification for the data in the app, users that hold the pentest, stakeholders, etc.
+
+    Examples:
+        >>> from wintermute import core
+        >>> pt = core.Pentest("testPentest")
+        >>> pt.addAnalyst("Alice", "aalice", "alice@example.com")
+        True
+        >>> pt.addDevice(
+        ...     "host1", "192.168.1.10", "aa:bb:cc:dd:ee:ff", "Linux", "host1.local"
+        ... )
+        True
+        >>> pt.addUser(
+        ...     uid="jsmith", name="John Smith", email="john@example.com", teams=["Red"]
+        ... )
+        True
+        >>> pt.addAWSAccount(
+        ...     accountId="111122223333", name="Prod", description="Prod account"
+        ... )
+        True
+        >>> pt.save()
 
     Attributes:
         * ApplicationName (str): Name of the application (default is 'DefaultApp')
@@ -715,6 +951,7 @@ class Pentest(Operation):
         # self.loadPentest()
 
     def loadPentest(self) -> None:
+        """Load the pentest from the TinyDB database"""
         f = open(f"{self.operation_name}.json")
         savedData = json.load(f)
         # First record, we shouldn't have more than one anyway, if so .. we shall revisit this
