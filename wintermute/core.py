@@ -14,12 +14,75 @@ import json
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Sequence, Union
+from typing import Any, Dict, Self, Sequence
 
-from tinydb import Query, TinyDB
+from tinydb import TinyDB
 
 
-class ReproductionStep:
+def _jsonify(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.to_dict()
+    if isinstance(value, list):
+        return [_jsonify(v) for v in value]
+    if isinstance(value, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+        return str(value)
+    return value
+
+
+class BaseModel:
+    __schema__: dict[str, Any] = {}
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k, v in self.__dict__.items():
+            # Skip private attrs and DB handles
+            if k.startswith("_") or isinstance(v, TinyDB):
+                continue
+            out[k] = _jsonify(v)
+        return out
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        if not isinstance(data, dict):
+            raise TypeError(f"Expected dict for {cls.__name__}, got {type(data)}")
+
+        kwargs: dict[str, Any] = {}
+        schema = getattr(cls, "__schema__", {})
+
+        for key, val in data.items():
+            if key in schema:
+                subcls = schema[key]
+                if isinstance(val, list):
+                    normalized = []
+                    for v in val:
+                        if isinstance(v, dict):
+                            normalized.append(subcls.from_dict(v))
+                        elif isinstance(v, subcls):
+                            normalized.append(v)
+                        else:
+                            raise TypeError(
+                                f"Unexpected type in list for {key}: {type(v)}"
+                            )
+                    kwargs[key] = normalized
+                elif isinstance(val, dict):
+                    kwargs[key] = subcls.from_dict(val)
+                elif isinstance(val, subcls):
+                    kwargs[key] = val
+                else:
+                    raise TypeError(f"Unexpected type for {key}: {type(val)}")
+            else:
+                kwargs[key] = val
+
+        return cls(**kwargs)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, self.__class__) and self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash(json.dumps(self.to_dict(), sort_keys=True))
+
+
+class ReproductionStep(BaseModel):
     """This class holds a reproduction step for vulnerabilities"""
 
     def __init__(self) -> None:
@@ -31,62 +94,8 @@ class ReproductionStep:
         self.fixOutput = None
         pass
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
 
-
-class Vulnerability:
-    """This class holds a vulnerability found"""
-
-    def __init__(
-        self,
-        title: str = "",
-        description: str = "",
-        threat: str = "",
-        cvss: int = 0,
-        mitigation: bool = True,
-        fix: bool = True,
-        fix_desc: str = "",
-        mitigation_desc: str = "",
-        risk: Dict[Any, Any] = {},
-        verified: bool = False,
-    ) -> None:
-        self.title = title
-        self.description = description
-        self.threat = threat
-        self.cvss = cvss
-        self.mitigation = mitigation  # Boolean
-        self.fix = fix  # Boolean
-        self.mitigation_desc = mitigation_desc
-        self.fix_desc = fix_desc
-        self.verified = verified  # If exploited or high confidence this will be true
-        self.reproduction_steps: Sequence[ReproductionStep] = []
-        self.risk = Risk()
-        if risk is not None:
-            self.setRisk(**risk)
-
-    def setRisk(
-        self, likelihood: str = "Low", impact: str = "Low", severity: str = "Low"
-    ) -> None:
-        self.risk.likelihood = likelihood
-        self.risk.impact = impact
-        self.risk.severity = severity
-
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
-
-
-class Risk:
+class Risk(BaseModel):
     """This class defines and holds the Risks, it inherits from the Vulns
 
     This class defines the risk for the vulnerability is assigned to, is designed to
@@ -105,46 +114,16 @@ class Risk:
         self.impact = impact
         self.severity = severity
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
 
+class Vulnerability(BaseModel):
+    """This class holds a vulnerability found"""
 
-class AWSAccount:
-    """This class holds the model of the AWS accounts
-
-    This class holds the AWS account details, including vulnerabilities found within them.
-
-    Attributes:
-        * accountId (str): Id number of the AWS account
-        * name (str): Name of the AWS account
-        * description (str): Description of the AWS account
-        * vulnerabilities (array): Vulnerabilities assigned to the account
-    """
+    __schema__ = {
+        "risk": Risk,
+        "reproduction_steps": ReproductionStep,
+    }
 
     def __init__(
-        self,
-        accountId: str = "",
-        name: str = "",
-        description: str = "",
-        vulnerabilities: list[Vulnerability] = [],
-    ) -> None:
-        self.accountId = accountId
-        self.name = name
-        self.description = description
-        self.vulnerabilities: list[Vulnerability] = []
-        if vulnerabilities is not None:
-            vulnerability: Vulnerability
-            for vulnerability in vulnerabilities:
-                # self.addVulnerability(**vulnerability)
-                self.addVulnerability(vulnerability.toJSON())
-        pass
-
-    def addVulnerability(
         self,
         title: str = "",
         description: str = "",
@@ -154,34 +133,35 @@ class AWSAccount:
         fix: bool = True,
         fix_desc: str = "",
         mitigation_desc: str = "",
-        risk: Dict[Any, Any] = {},
+        risk: Dict[Any, Any] | Risk = {},
         verified: bool = False,
+        reproduction_steps: list[ReproductionStep] | None = None,
     ) -> None:
-        v = Vulnerability(
-            title=title,
-            description=description,
-            threat=threat,
-            cvss=cvss,
-            mitigation=mitigation,
-            fix=fix,
-            fix_desc=fix_desc,
-            mitigation_desc=mitigation_desc,
-            risk=risk,
-            verified=verified,
-        )
-        if v not in self.vulnerabilities:
-            self.vulnerabilities.append(v)
+        self.title = title
+        self.description = description
+        self.threat = threat
+        self.cvss = cvss
+        self.mitigation = mitigation  # Boolean
+        self.fix = fix  # Boolean
+        self.mitigation_desc = mitigation_desc
+        self.fix_desc = fix_desc
+        self.verified = verified  # If exploited or high confidence this will be true
+        self.reproduction_steps = reproduction_steps or []
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
+        if isinstance(risk, Risk):
+            self.risk = risk
+        elif isinstance(risk, dict):
+            self.risk = Risk.from_dict(risk)
+        else:
+            self.risk = Risk()
+
+    def setRisk(
+        self, likelihood: str = "Low", impact: str = "Low", severity: str = "Low"
+    ) -> None:
+        self.risk = Risk(likelihood=likelihood, impact=impact, severity=severity)
 
 
-class Service:
+class Service(BaseModel):
     """This class holds the network port objects
 
     This class holds the network port objects and will allow to track states, versions and vulns.
@@ -194,6 +174,10 @@ class Service:
         * transport_layer (str): Application protocol (HTTP, HTTPS, FTP, SSH, etc)
     """
 
+    __schema__ = {
+        "vulnerabilities": Vulnerability,
+    }
+
     def __init__(
         self,
         protocol: str = "ipv4",
@@ -201,20 +185,18 @@ class Service:
         portNumber: int = 0,
         banner: str = "",
         transport_layer: str = "",
-        vulnerabilities: list[Vulnerability] = [],
+        vulnerabilities: list[Vulnerability] | list[dict[str, Any]] | None = None,
     ) -> None:
         self.protocol = protocol
         self.app = app
         self.portNumber = portNumber
         self.banner = banner
-        self.transport_layer = transport_layer  # HTTP, HTTPS, FTP, SSH, etc.
-        # Array of vulnerability objects related with the port
+        self.transport_layer = transport_layer
         self.vulnerabilities: list[Vulnerability] = []
-        if vulnerabilities is not None:
-            for vulnerability in vulnerabilities:
-                # self.addVulnerability(**vulnerability)
-                self.addVulnerability(vulnerability.toJSON())
-        pass
+        for v in vulnerabilities or []:
+            self.vulnerabilities.append(
+                Vulnerability.from_dict(v) if isinstance(v, dict) else v
+            )
 
     def addVulnerability(
         self,
@@ -228,7 +210,7 @@ class Service:
         mitigation_desc: str = "",
         risk: Dict[Any, Any] = {},
         verified: bool = False,
-    ) -> None:
+    ) -> bool:
         v = Vulnerability(
             title=title,
             description=description,
@@ -243,17 +225,11 @@ class Service:
         )
         if v not in self.vulnerabilities:
             self.vulnerabilities.append(v)
-
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
+            return True
+        return False
 
 
-class Device:
+class Device(BaseModel):
     """This class contains the information about the devices in the operation.
 
     This class contains the information about the device in the operation,
@@ -276,27 +252,33 @@ class Device:
         * services (array): Array of Service objects holding the open services on the machine.
     """
 
+    __schema__ = {
+        "services": Service,
+    }
+
     def __init__(
         self,
         hostname: str = "",
-        ipaddr: Union[
-            ipaddress.IPv4Address, ipaddress.IPv6Address
-        ] = ipaddress.ip_address("127.0.0.1"),
+        ipaddr: str
+        | ipaddress.IPv4Address
+        | ipaddress.IPv6Address
+        | None = "127.0.0.1",
         macaddr: str = "",
         operatingsystem: str = "",
         fqdn: str = "",
-        services: list[Service] = [],
+        services: list[Service] | list[dict[str, Any]] | None = None,
     ) -> None:
         self.hostname = hostname
-        self.ipaddr = ipaddress.ip_address(ipaddr) if ipaddr else None
+        if isinstance(ipaddr, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+            self.ipaddr = ipaddr
+        else:
+            self.ipaddr = ipaddress.ip_address(ipaddr or "127.0.0.1")
         self.macaddr = macaddr
         self.operatingsystem = operatingsystem
         self.fqdn = fqdn
         self.services: list[Service] = []
-        if services is not None:
-            for service in services:
-                # self.addService(**service)
-                self.addService(service.toJSON())
+        for s in services or []:
+            self.services.append(Service.from_dict(s) if isinstance(s, dict) else s)
 
     def addService(
         self,
@@ -319,21 +301,13 @@ class Device:
             self.services.append(s)
         pass
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else str(o),
-            sort_keys=True,
-            indent=4,
-        )
 
+class User(BaseModel):
+    """This class holds the user object."""
 
-class User:
-    """This class holds the user object.
-
-    This class represents a user that is to be targetted by the operation, this can
-    be a user for a team that is NOT the operational team, can be a stakeholder and other.
-    """
+    __schema__ = {
+        "desktops": Device,
+    }
 
     def __init__(
         self,
@@ -341,55 +315,140 @@ class User:
         name: str = "",
         email: str = "",
         dept: str = "",
-        permissions: Sequence[str] = [],
+        permissions: Sequence[str] | None = None,
         override_reason: str = "",
-        AWSAdminAccounts: Sequence[AWSAccount] = [],
-        AWSLoginAccounts: Sequence[AWSAccount] = [],
-        desktops: list[Device] = [],
-        ldap_groups: Sequence[str] = [],
-        teams: Sequence[str] = [],
+        desktops: list[Device] | None = None,
+        ldap_groups: Sequence[str] | None = None,
+        teams: Sequence[str] | None = None,
     ) -> None:
         self.uid = uid
         self.name = name
-        self.email = email
+        self.email = (
+            email if email is not None else (f"{uid}@stubemail.com" if uid else "")
+        )
         self.dept = dept
-        self.permissions = permissions
+        self.permissions = list(permissions) if permissions else []
         self.override_reason = override_reason
-        self.desktops: list[Device] = []
-        self.ldap_groups: list[str] = []
+        self.desktops: list[Device] = list(desktops) if desktops else []
+        self.ldap_groups: list[str] = list(ldap_groups) if ldap_groups else []
         self.teams: list[str] = []
-        self.AWSAdminAccounts: list[AWSAccount] = []
-        self.AWSLoginAccounts: list[AWSAccount] = []
 
-        if teams is not None:
+        if teams:
             for team in teams:
                 if team not in self.teams:
                     self.teams.append(team)
 
-        if desktops is not None:
-            self.desktops = desktops
+    # -------- Normalized adders --------
 
-        if AWSAdminAccounts is not None:
-            for account in AWSAdminAccounts:
-                # acct = AWSAccount(**account)
-                acct = AWSAccount(account.toJSON())
-                self.AWSAdminAccounts.append(acct)
+    def addDesktop(
+        self, hostname: str, ipaddr: str, macaddr: str, operatingsystem: str, fqdn: str
+    ) -> bool:
+        d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
+        if d not in self.desktops:
+            self.desktops.append(d)
+            return True
+        return False
 
-        if email is None and self.uid is not None:
-            self.email = f"{self.uid}@stubemail.com"
 
-        pass
+class AWSAccount(BaseModel):
+    """
+    This class represents an AWS Account that may contain users and vulnerabilities.
+    """
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
+    __schema__ = {
+        "vulnerabilities": Vulnerability,
+        "users": User,
+    }
+
+    def __init__(
+        self,
+        accountId: str,
+        name: str,
+        description: str = "",
+        vulnerabilities: list[Vulnerability] | None = None,
+        users: list[User] | None = None,
+    ):
+        self.accountId = accountId
+        self.name = name
+        self.description = description
+
+        # Rehydrate vulnerabilities
+        self.vulnerabilities: list[Vulnerability] = []
+        if vulnerabilities:
+            for v in vulnerabilities:
+                if isinstance(v, dict):
+                    self.vulnerabilities.append(Vulnerability.from_dict(v))
+                elif isinstance(v, Vulnerability):
+                    self.vulnerabilities.append(v)
+
+        # Rehydrate users
+        self.users: list[User] = []
+        if users:
+            for u in users:
+                if isinstance(u, dict):
+                    self.users.append(User.from_dict(u))
+                elif isinstance(u, User):
+                    self.users.append(u)
+
+    # -------- Normalized adders --------
+
+    def addVulnerability(
+        self,
+        title: str,
+        description: str,
+        threat: str = "",
+        cvss: int = 0,
+        mitigation: bool = True,
+        fix: bool = True,
+        fix_desc: str = "",
+        mitigation_desc: str = "",
+        risk: dict[str, str] | None = None,
+        verified: bool = False,
+    ) -> bool:
+        v = Vulnerability(
+            title=title,
+            description=description,
+            threat=threat,
+            cvss=cvss,
+            mitigation=mitigation,
+            fix=fix,
+            fix_desc=fix_desc,
+            mitigation_desc=mitigation_desc,
+            verified=verified,
         )
+        if risk:
+            v.setRisk(**risk)
+        if v not in self.vulnerabilities:
+            self.vulnerabilities.append(v)
+            return True
+        return False
+
+    def addUser(
+        self,
+        uid: str,
+        name: str,
+        email: str,
+        teams: list[str],
+        dept: str = "",
+        permissions: list[str] | None = None,
+        override_reason: str = "",
+    ) -> bool:
+        u = User(
+            uid=uid,
+            name=name,
+            email=email,
+            teams=teams,
+            dept=dept,
+            permissions=permissions or [],
+            override_reason=override_reason,
+        )
+        if u not in self.users:
+            self.users.append(u)
+            return True
+        return False
 
 
-class Analyst:
+class Analyst(BaseModel):
     """This class contains the information about the analyst for the incident, including name, ID and email.
 
     This class contains the information about the analysts for the incident, including name, ID and email,
@@ -445,16 +504,8 @@ class Analyst:
         """Check that the userid is not None"""
         return True if not None else False
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            sort_keys=True,
-            indent=4,
-        )
 
-
-class Operation:
+class Operation(BaseModel):
     """This class contains the information about the operation including devices, analysts and name of the operation.
 
     This is the top level class to call on operations, while you can call all other classes such as EDR, Devices, etc.
@@ -474,50 +525,50 @@ class Operation:
 
     """
 
+    __schema__ = {
+        "analysts": Analyst,
+        "devices": Device,
+        "users": User,
+        "awsaccounts": AWSAccount,
+    }
+
     def __init__(
         self,
         operation_name: str = "Wintermute",
-        analysts: list[Analyst] = [],
+        analysts: list[Analyst] | list[dict[str, Any]] | None = None,
         ticket: str = "",
-        devices: list[Device] = [],
+        devices: list[Device] | list[dict[str, Any]] | None = None,
         end_date: str = datetime.today().strftime("%m/%d/%Y"),
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
-        users: list[User] = [],
+        users: list[User] | list[dict[str, Any]] | None = None,
         operation_id: str = str(uuid.uuid1()),
-        awsaccounts: list[AWSAccount] = [],
+        awsaccounts: list[AWSAccount] | list[dict[str, Any]] | None = None,
         db: str = "",
+        **kwargs: Any,  # absorb unknown keys safely
     ) -> None:
         self.operation_name = operation_name
-        self.db = TinyDB(f"{operation_name}.json")
-        # Make a UUID based on the host ID and the current machine time.
+        self._db = TinyDB(f"{operation_name}.json")  # private so to_dict skips it
         self.operation_id = operation_id
+        self.start_date = start_date
+        self.end_date = end_date
+        self.ticket = ticket or None
+
+        # fresh lists, then append rehydrated items
         self.analysts: list[Analyst] = []
         self.devices: list[Device] = []
         self.users: list[User] = []
         self.awsaccounts: list[AWSAccount] = []
-        self.start_date: str = start_date
-        self.end_date: str = end_date
-        if analysts is not None:
-            for analyst in analysts:
-                # self.addAnalyst(**analyst)
-                self.addAnalyst(analyst.toJSON())
 
-        if devices is not None:
-            for device in devices:
-                # self.addDevice(**device)
-                self.addDevice(device.toJSON())
-
-        if users is not None:
-            for user in users:
-                # self.addUser(**user)
-                self.addUser(*user.toJSON())
-
-        if awsaccounts is not None:
-            for aws_account in awsaccounts:
-                # self.addAWSAccount(**aws_account)
-                self.addAWSAccount(*aws_account.toJSON())
-
-        self.ticket = ticket if ticket else None
+        for a in analysts or []:
+            self.analysts.append(Analyst.from_dict(a) if isinstance(a, dict) else a)
+        for d in devices or []:
+            self.devices.append(Device.from_dict(d) if isinstance(d, dict) else d)
+        for u in users or []:
+            self.users.append(User.from_dict(u) if isinstance(u, dict) else u)
+        for acc in awsaccounts or []:
+            self.awsaccounts.append(
+                AWSAccount.from_dict(acc) if isinstance(acc, dict) else acc
+            )
 
     @property
     def dbOperation(self) -> TinyDB:
@@ -529,81 +580,65 @@ class Operation:
             self.operation_name = value
             self.db = TinyDB(f"{value}.json")
 
-    def addAnalyst(self, name: str = "", userid: str = "", email: str = "") -> bool:
-        # We check we actually have
-        if all(v is not None for v in [name, userid, email]):
-            # We create the object then add it to the array
-            analyst = Analyst(name=name, userid=userid, email=email)
-            if analyst not in self.analysts:
-                self.analysts.append(analyst)
-                return True
-        return False
-
-    def deleteAnalyst(self, name: str = "", userid: str = "", email: str = "") -> bool:
-        if all(v is not None for v in [name, userid, email]):
-            # We create the object then add it to the array
-            analyst = Analyst(name=name, userid=userid, email=email)
-            if analyst not in self.analysts:
-                self.analysts.remove(analyst)
-                return True
-        return True
-
-    def addDevice(
-        self,
-        hostname: str = "",
-        ipaddr: Union[
-            ipaddress.IPv4Address, ipaddress.IPv6Address
-        ] = ipaddress.ip_address("127.0.0.1"),
-        macaddr: str = "",
-        operatingsystem: str = "",
-        fqdn: str = "",
-        services: list[Service] = [],
-    ) -> bool:
-        dev = Device(
-            hostname=hostname,
-            ipaddr=ipaddr,
-            macaddr=macaddr,
-            operatingsystem=operatingsystem,
-            fqdn=fqdn,
-            services=services,
-        )
-        if dev not in self.devices:
-            self.devices.append(dev)
+    def addAnalyst(self, name: str, userid: str, email: str) -> bool:
+        a = Analyst(name, userid, email)
+        if a not in self.analysts:
+            self.analysts.append(a)
             return True
         return False
 
-    def addUser(self, **kwargs) -> bool:  # type: ignore
-        u = User(**kwargs)
+    def addDevice(
+        self, hostname: str, ipaddr: str, macaddr: str, operatingsystem: str, fqdn: str
+    ) -> bool:
+        d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
+        if d not in self.devices:
+            self.devices.append(d)
+            return True
+        return False
+
+    def addUser(
+        self,
+        uid: str,
+        name: str,
+        email: str,
+        teams: list[str],
+        dept: str = "",
+        permissions: list[str] | None = None,
+        override_reason: str = "",
+    ) -> bool:
+        u = User(
+            uid=uid,
+            name=name,
+            email=email,
+            teams=teams,
+            dept=dept,
+            permissions=permissions or [],
+            override_reason=override_reason,
+        )
         if u not in self.users:
             self.users.append(u)
             return True
         return False
 
-    def addAWSAccount(self, **kwargs) -> bool:  # type: ignore
-        a = AWSAccount(**kwargs)
+    def addAWSAccount(self, accountId: str, name: str, description: str = "") -> bool:
+        a = AWSAccount(accountId, name, description)
         if a not in self.awsaccounts:
             self.awsaccounts.append(a)
             return True
         return False
 
-    def load(self) -> None:
-        f = open(f"{self.operation_name}.json")
-        savedData = json.load(f)
-        # First record, we shouldn't have more than one anyway, if so .. we shall revisit this
-        self.__init__(**savedData["_default"]["1"])  # type: ignore[misc]
-
     def save(self) -> None:
-        self.db.upsert(
-            json.loads(self.toJSON()), Query().operation_name == self.operation_name
-        )
-        pass
+        db = TinyDB(f"{self.operation_name}.json")
+        db.drop_tables()
+        db.insert(self.to_dict())
+        db.close()
 
-    def toJSON(self) -> str:
-        return json.dumps(
-            self,
-            default=lambda o: o.__dict__ if "__dict__" in dir(o) else o.name,
-            indent=4,
-        )
+    def load(self) -> None:
+        db = TinyDB(f"{self.operation_name}.json")
+        saved = db.all()[0]
+        db.close()
+        loaded = Operation.from_dict(saved)
+        self.__dict__.update(loaded.__dict__)
 
 
 class Pentest(Operation):
@@ -614,7 +649,6 @@ class Pentest(Operation):
 
     Attributes:
         * ApplicationName (str): Name of the application (default is 'DefaultApp')
-        * ANVIL (str): ANVIL application id
         * dataClassification (str): Data classification for the application (default is 'Public')
     """
 
@@ -651,7 +685,6 @@ class Pentest(Operation):
             analysts (array): array of Analyst objects or json with the analysts to later be parsed
             ticket (str): Ticket ID for the pentesting
             ApplicationName (str): Name of the application (default is 'DefaultApp')
-            ANVIL (str): ANVIL application id
             dataClassification (str): Data classification for the application (default is 'Public')
             db (TinyDB): database object pointing to the TinyDB
             devices (array): Array of devices that are into the pentest
@@ -687,9 +720,3 @@ class Pentest(Operation):
         # First record, we shouldn't have more than one anyway, if so .. we shall revisit this
         print(savedData)
         self.__init__(**savedData["_default"]["1"])  # type: ignore[misc]
-
-    def save(self) -> None:
-        self.db.upsert(
-            json.loads(self.toJSON()), Query().operation_name == self.operation_name
-        )
-        pass

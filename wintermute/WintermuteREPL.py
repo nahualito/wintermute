@@ -243,7 +243,7 @@ class wintermute(cmd2.Cmd):
     @cmd2.with_category("Operation Commands")
     def do_printOperation2Screen(self, args: Any) -> None:
         """Print current database tree as json into the screen"""
-        print(CurrentOperation.toJSON())
+        print(CurrentOperation.to_dict())
 
 
 def main() -> int:

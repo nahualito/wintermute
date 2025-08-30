@@ -1,244 +1,150 @@
-import ipaddress
-import json
+# tests/test_core.py
+from pathlib import Path
+from typing import Any
 
-import pytest
+from wintermute import core
 
-from wintermute.core import Analyst, AWSAccount, Device, Operation, User, Vulnerability
-
-"""
-Operation test cases
-"""
+# ------------------------
+# Helpers
+# ------------------------
 
 
-@pytest.fixture
-def operation() -> Operation:
-    """pytest fixture to create an operation instance for testing."""
-    return Operation(
-        operation_name="onoSendai",
-        ticket="V11223344",
-        start_date="01/01/2001",
-        end_date="01/01/2001",
+def make_full_operation(tmp_path: Path) -> core.Operation:
+    op = core.Operation("TestOp")
+
+    # Analysts
+    assert op.addAnalyst("Alice Analyst", "aalice", "alice@example.com")
+
+    # Devices with nested services/vulns
+    assert op.addDevice(
+        "host1", "127.0.0.1", "00:11:22:33:44:55", "Linux", "host1.local"
+    )
+    dev = op.devices[0]
+    dev.addService(
+        protocol="ipv4",
+        app="nginx",
+        portNumber=80,
+        banner="nginx test",
+        transport_layer="HTTP",
+    )
+    svc = dev.services[0]
+    svc.addVulnerability(
+        title="Weak TLS",
+        description="TLS 1.0 enabled",
+        cvss=5,
+        risk={"likelihood": "High", "impact": "Medium", "severity": "Moderate"},
     )
 
-
-def test_operation_creation(operation: Operation) -> None:
-    """Test the creation of the Operation instance."""
-    assert operation.operation_name == "onoSendai"
-    assert operation.ticket == "V11223344"
-    assert operation.start_date == "01/01/2001"
-    assert operation.end_date == "01/01/2001"
-
-
-def test_operation_tojson(operation: Operation) -> None:
-    """Test the operation of the toJSON() function for Operation"""
-    tojson = json.loads(
-        '{\n    "analysts": [],\n    "awsaccounts": [],\n    "db": {\n        "_opened": true,\n        "_storage": \
-    {\n            "_handle": {\n                "mode": "r+"\n            },\n            "_mode": "r+",\n            "kwargs": \
-    {}\n        },\n        "_tables": {}\n    },\n    "devices": [],\n    "end_date": "01/01/2001",\n    \
-    "operation_id": "0446d324-2311-11f0-a6a8-54b2030b4724",\n    "operation_name": "onoSendai",\n    \
-        "start_date": "01/01/2001",\n    "ticket": "V11223344",\n    "users": []\n}'
+    # Users with desktops
+    assert op.addUser("jsmith", "John Smith", "john@example.com", ["Red"])
+    user = op.users[0]
+    user.addDesktop(
+        "desktop1", "192.168.1.5", "aa:bb:cc:dd:ee:ff", "Windows", "desk.local"
     )
 
-    assert tojson["operation_name"] == operation.operation_name
-    assert tojson["ticket"] == operation.ticket
-    assert tojson["start_date"] == operation.start_date
-    assert tojson["end_date"] == operation.end_date
-    assert tojson["analysts"] == operation.analysts
-
-
-"""
-User test cases
-"""
-
-
-@pytest.fixture
-def user() -> User:
-    """pytest fixture to create a user instance for testing."""
-    return User(
-        uid="500",
-        name="nahualito",
-        email="nahualito@0hday.org",
-        dept="Research & Development",
-        permissions=["research", "user", "root"],
-    )
-
-
-def test_user_creation(user: User) -> None:
-    """Test the creation of the User instance."""
-    assert user.name == "nahualito"
-    assert user.uid == "500"
-    assert user.email == "nahualito@0hday.org"
-    assert user.dept == "Research & Development"
-    assert user.permissions == ["research", "user", "root"]
-
-
-def test_user_tojson(user: User) -> None:
-    """Test the operation of the toJSON() function for User"""
-    tojson = json.loads(
-        '{\n    "AWSAdminAccounts": [],\n    "AWSLoginAccounts": [],\n    "dept": "Research & Development",\n    \
-                        "desktops": [],\n    "email": "nahualito@0hday.org",\n    "ldap_groups": [],\n    "name": "nahualito",\n  \
-                        "override_reason": "",\n    "permissions": [\n        "research",\n        "user",\n        "root"\n    ],\n \
-                        "teams": [],\n    "uid": "500"\n}'
-    )
-
-    assert tojson["name"] == user.name
-    assert tojson["email"] == user.email
-    assert tojson["uid"] == user.uid
-    assert tojson["dept"] == user.dept
-    assert tojson["permissions"] == user.permissions
-
-
-"""
-Device test cases
-"""
-
-
-@pytest.fixture
-def device() -> Device:
-    """pytest fixture to create a Device instance for testing."""
-    return Device(
-        hostname="devicetest",
-        macaddr="aa:bb:cc:dd:ee:ff",
-        operatingsystem="Linux",
-        fqdn="devicetest.0hday.org",
-    )
-
-
-def test_device_creation(device: Device) -> None:
-    """Test the creation of the Device instance."""
-    assert device.hostname == "devicetest"
-    assert device.macaddr == "aa:bb:cc:dd:ee:ff"
-    assert device.operatingsystem == "Linux"
-    assert device.fqdn == "devicetest.0hday.org"
-    assert device.ipaddr == ipaddress.ip_address("127.0.0.1")
-
-
-def test_device_tojson(device: Device) -> None:
-    """Test the operation of the toJSON() function for Device"""
-    tojson = json.loads(
-        '{\n    "fqdn": "devicetest.0hday.org",\n    "hostname": "devicetest",\n    "ipaddr": "127.0.0.1",\n    \
-                        "macaddr": "aa:bb:cc:dd:ee:ff",\n    "operatingsystem": "Linux",\n    "services": []\n}'
-    )
-
-    assert tojson["fqdn"] == device.fqdn
-    assert tojson["hostname"] == device.hostname
-    assert tojson["macaddr"] == device.macaddr
-    assert tojson["operatingsystem"] == device.operatingsystem
-    assert tojson["ipaddr"] == str(device.ipaddr)
-
-
-"""
-Analyst test cases
-"""
-
-
-@pytest.fixture
-def analyst() -> Analyst:
-    """pytest fixture to create an Analyst instance for testing."""
-    return Analyst(name="Test User", userid="testusr", email="testusr@test.com")
-
-
-def test_analyst_creation(analyst: Analyst) -> None:
-    """Test the creation of the Analyst instance."""
-    assert analyst.name == "Test User"
-    assert analyst.userid == "testusr"
-    assert analyst.email == "testusr@test.com"
-
-
-def test_analyst_tojson(analyst: Analyst) -> None:
-    """Test the toJSON() function for the Analyst instance"""
-    tojson = json.loads(
-        '{\n    "email": "testusr@test.com",\n    "name": "Test User",\n    "userid": "testusr"\n}'
-    )
-
-    assert analyst.name == tojson["name"]
-    assert analyst.userid == tojson["userid"]
-    assert analyst.email == tojson["email"]
-
-
-"""
-Vulnerability test cases
-"""
-
-
-@pytest.fixture
-def vulnerability() -> Vulnerability:
-    """pytest fixture to create a Vulnerability instance for testing."""
-    return Vulnerability(
-        title="Test Vuln",
-        description="This is a test vulnerability",
-        threat="If it breaks then the package won't work",
-        cvss=8,
-        mitigation=False,
-        fix=True,
-        fix_desc="Make sure you have test cases for all",
-        mitigation_desc="There are no mitigations",
+    # AWS Account with user + vulnerability
+    assert op.addAWSAccount("111122223333", "Prod", "Production account")
+    aws = op.awsaccounts[0]
+    aws.addUser("ajones", "Alice Jones", "alicej@example.com", ["Blue"])
+    aws.addVulnerability(
+        title="S3 Public Bucket",
+        description="World readable bucket",
+        cvss=7,
+        risk={"likelihood": "High", "impact": "High", "severity": "Critical"},
         verified=True,
     )
 
-
-def test_vulnerability_creation(vulnerability: Vulnerability) -> None:
-    """Test the creation of the Vulnerability object."""
-    assert vulnerability.title == "Test Vuln"
-    assert vulnerability.description == "This is a test vulnerability"
-    assert vulnerability.threat == "If it breaks then the package won't work"
-    assert vulnerability.cvss == 8
-    assert vulnerability.mitigation is False
-    assert vulnerability.fix is True
-    assert vulnerability.fix_desc == "Make sure you have test cases for all"
-    assert vulnerability.verified is True
+    return op
 
 
-def test_vulnerability_tojson(vulnerability: Vulnerability) -> None:
-    """Test the toJSON() function for the Vulnerability instance"""
-    tojson = json.loads(
-        '{\n    "cvss": 8,\n    "description": "This is a test vulnerability",\n    \
-                        "fix": true,\n    "fix_desc": "Make sure you have test cases for all",\n    \
-                        "mitigation": false,\n    "mitigation_desc": "There are no mitigations",\n   \
-                        "reproduction_steps": [],\n    "risk": {\n        "impact": "Low",\n        \
-                        "likelihood": "Low",\n        "severity": "Low"\n    },\n    \
-                        "threat": "If it breaks then the package won\'t work",\n    \
-                        "title": "Test Vuln",\n    "verified": true\n}'
-    )
-
-    assert vulnerability.title == tojson["title"]
-    assert vulnerability.description == tojson["description"]
-    assert vulnerability.cvss == tojson["cvss"]
-    assert vulnerability.fix is True
-    assert vulnerability.fix_desc == tojson["fix_desc"]
-    assert vulnerability.threat == tojson["threat"]
+# ------------------------
+# Tests
+# ------------------------
 
 
-"""
-AWSAccount test cases
-"""
+def test_add_methods_prevent_duplicates() -> None:
+    op = core.Operation("DupOp")
+
+    # Analyst
+    assert op.addAnalyst("Bob", "bsmith", "bob@example.com")
+    assert not op.addAnalyst("Bob", "bsmith", "bob@example.com")
+
+    # Device
+    assert op.addDevice("h", "127.0.0.1", "00", "Linux", "h.local")
+    assert not op.addDevice("h", "127.0.0.1", "00", "Linux", "h.local")
+
+    # User
+    assert op.addUser("u1", "User1", "u1@example.com", ["Team"])
+    assert not op.addUser("u1", "User1", "u1@example.com", ["Team"])
+
+    # AWS Account
+    assert op.addAWSAccount("acct1", "Account One")
+    assert not op.addAWSAccount("acct1", "Account One")
 
 
-@pytest.fixture
-def awsaccount() -> AWSAccount:
-    """pytest fixture to create an AWSAccount instance for testing."""
-    return AWSAccount(
-        accountId="00112233445566778899",
-        name="Test AWS Account",
-        description="This is a stub for an AWS account for testing",
-    )
+def test_operation_to_dict_and_from_dict() -> None:
+    op = make_full_operation(Path("."))
+
+    d = op.to_dict()
+    assert "analysts" in d
+    assert "devices" in d
+    assert "users" in d
+    assert "awsaccounts" in d
+
+    op2 = core.Operation.from_dict(d)
+    assert isinstance(op2.devices[0], core.Device)
+    assert isinstance(op2.devices[0].services[0], core.Service)
+    assert isinstance(op2.devices[0].services[0].vulnerabilities[0], core.Vulnerability)
+    assert isinstance(op2.devices[0].services[0].vulnerabilities[0].risk, core.Risk)
 
 
-def test_awsaccount_creation(awsaccount: AWSAccount) -> None:
-    """Test the creation of the AWSAccount objecct."""
-    assert awsaccount.accountId == "00112233445566778899"
-    assert awsaccount.name == "Test AWS Account"
-    assert awsaccount.description == "This is a stub for an AWS account for testing"
+def test_operation_save_and_load(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    op = make_full_operation(tmp_path)
+    op.save()
+
+    f = tmp_path / "TestOp.json"
+    assert f.exists()
+
+    op2 = core.Operation("TestOp")
+    op2.load()
+
+    # Analysts survived
+    assert len(op2.analysts) == 1
+    assert op2.analysts[0].name == "Alice Analyst"
+
+    # Devices -> Service -> Vulnerability -> Risk survived
+    dev2 = op2.devices[0]
+    svc2 = dev2.services[0]
+    vuln2 = svc2.vulnerabilities[0]
+    assert vuln2.title == "Weak TLS"
+    assert vuln2.risk.likelihood == "High"
+
+    # Users -> Desktop survived
+    u2 = op2.users[0]
+    assert u2.uid == "jsmith"
+    assert u2.desktops[0].hostname == "desktop1"
+
+    # AWS Account -> User + Vulnerability survived
+    aws2 = op2.awsaccounts[0]
+    assert aws2.users[0].uid == "ajones"
+    assert aws2.vulnerabilities[0].risk.severity == "Critical"
 
 
-def test_awsaccount_tojson(awsaccount: AWSAccount) -> None:
-    """Test the toJSON() function for the AWSAccount instance"""
-    tojson = json.loads(
-        '{\n    "accountId": "00112233445566778899",\n    \
-                        "description": "This is a stub for an AWS account for testing",\n    \
-                        "name": "Test AWS Account",\n    "vulnerabilities": []\n}'
-    )
+def test_pentest_inherits_and_round_trip(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
 
-    assert awsaccount.accountId == tojson["accountId"]
-    assert awsaccount.name == tojson["name"]
-    assert awsaccount.description == tojson["description"]
+    pt = core.Pentest(name="PT1")
+    pt.addAnalyst("Pentest Person", "pentester", "pentest@example.com")
+    pt.addAWSAccount("444455556666", "TestAccount")
+    pt.save()
+
+    f = tmp_path / "PT1.json"
+    assert f.exists()
+
+    pt2 = core.Pentest("PT1")
+    pt2.load()
+
+    assert pt2.analysts[0].userid == "pentester"
+    assert pt2.awsaccounts[0].accountId == "444455556666"

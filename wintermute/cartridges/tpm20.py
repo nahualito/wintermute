@@ -135,6 +135,7 @@ class tpm20(CommandSet):
 
     def __init__(self, transport: TPMTransport = TPMTransport()):
         self.transport = transport
+        super().__init__()
 
     def execute(self, command: TPMCommands, parameters: bytes = b"") -> bytes:
         command_buffer = TPMCommandBuilder.build_command(command, parameters)
