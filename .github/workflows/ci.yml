@@ -43,7 +43,7 @@ jobs:
           *) echo "Hatch version incorrect." && exit 1 ;;
           esac
       - name: Install dependencies
-        run: hatch env create -e ci
+        run: hatch env create ci
       - name: Test virtualenv location
         run: |
           EXPECTED_VIRTUALENV_PATH=$GITHUB_WORKSPACE/.venv
