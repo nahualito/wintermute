@@ -15,7 +15,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     env:
       HATCH_ENV: "ci"
-      HATCH_VERSION: "1.14.0"
+      HATCH_VERSION: "1.15.0"
       PIPX_VERSION: "1.7.1"
     steps:
       - uses: actions/checkout@v4
@@ -66,8 +66,10 @@ jobs:
           else
             echo "Versions do not match." && exit 1
           fi
+      - name: Debug Hatch run resolution
+        run: hatch run -v -- ci:check
       - name: Run Hatch script for code quality checks
-        run: hatch run -e ci -- check
+        run: hatch run ci:check
       - name: Run tests
         run: hatch run -e ci -- coverage run
       - name: Enforce test coverage
