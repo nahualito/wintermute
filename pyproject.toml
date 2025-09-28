@@ -71,6 +71,15 @@ features = [
 ]
 path = ".venv"
 
+[tool.hatch.envs.ci.scripts]
+check = [
+  "ruff check",
+  "ruff format --check",
+  "mypy",
+  "npx -s -y prettier@'^3.4' . --check",
+  "npx -s -y cspell --dot --gitignore *.md **/*.md",
+]
+
 [tool.hatch.envs.default]
 dev-mode = true
 features = [

@@ -1,4 +1,28 @@
-# tests/test_peripherals.py
+# -*- coding: utf-8 -*-
+# pragma pylint: disable=unused-argument, no-self-use, line-too-long
+#
+# MIT License
+#
+# Copyright (c) 2024,2025 Enrique Alfonso Sanchez Montellano (nahualito)
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 from __future__ import annotations
 
 import json
@@ -91,9 +115,9 @@ def test_uart_default_values_and_type() -> None:
 def test_uart_pin_mapping_and_com_port_roundtrip() -> None:
     pins: Dict[str, Any] = {"tx": "P1", "rx": "P2", "gnd": "GND"}
     u = UART(name="dbg", pins=pins, comPort="/dev/ttyUSB0")
-    assert u.pins['tx'] == "P1"
-    assert u.pins['rx'] == "P2"
-    assert u.pins['gnd'] == "GND"
+    assert u.pins["tx"] == "P1"
+    assert u.pins["rx"] == "P2"
+    assert u.pins["gnd"] == "GND"
     assert u.com_port == "/dev/ttyUSB0"
     assert u.pType == PeripheralType.UART
 
