@@ -67,7 +67,7 @@ jobs:
             echo "Versions do not match." && exit 1
           fi
       - name: Debug Hatch run resolution
-        run: hatch run -v -- ci:check
+        run: hatch --verbose run -- ci:check
       - name: Run Hatch script for code quality checks
         run: hatch run ci:check
       - name: Run tests
