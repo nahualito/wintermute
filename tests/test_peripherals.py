@@ -4,12 +4,14 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Type
 
-from wintermute.core import BaseModel
+from wintermute.basemodels import (
+    BaseModel,
+    Peripheral,
+    PeripheralType,
+)
 from wintermute.peripherals import (
     TPM,
     UART,
-    Peripheral,
-    PeripheralType,
     TPM_interposer_commands,
     TPM_register,
 )
@@ -89,9 +91,9 @@ def test_uart_default_values_and_type() -> None:
 def test_uart_pin_mapping_and_com_port_roundtrip() -> None:
     pins: Dict[str, Any] = {"tx": "P1", "rx": "P2", "gnd": "GND"}
     u = UART(name="dbg", pins=pins, comPort="/dev/ttyUSB0")
-    assert u.tx == "P1"
-    assert u.rx == "P2"
-    assert u.gnd == "GND"
+    assert u.pins['tx'] == "P1"
+    assert u.pins['rx'] == "P2"
+    assert u.pins['gnd'] == "GND"
     assert u.com_port == "/dev/ttyUSB0"
     assert u.pType == PeripheralType.UART
 

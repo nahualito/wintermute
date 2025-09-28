@@ -14,4 +14,4 @@ sys.path.append(vendor_dir)
 
 __version__ = "0.1.0"
 
-__all__ = ["core", "peripherals", "WintermyteREPL"]
+__all__ = ["core", "peripherals", "WintermyteREPL", "basemodels"]

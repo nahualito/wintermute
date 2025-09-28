@@ -1,5 +1,27 @@
 # -*- coding: utf-8 -*-
 # pragma pylint: disable=unused-argument, no-self-use, line-too-long
+#
+# MIT License
+#
+# Copyright (c) 2024,2025 Enrique Alfonso Sanchez Montellano (nahualito)
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
 """
 Peripherals classes for onoSendai
@@ -10,66 +32,12 @@ to give access to hardware peripherals and have more abstraction for automation
 and attacking.
 """
 
+import ipaddress
 import struct
 from enum import Enum
 from typing import Any, Dict
 
-from .core import BaseModel
-
-
-class PeripheralType(Enum):
-    Unknown = 0x0
-    UART = 0x01
-    Ethernet = 0x02
-    Wifi = 0x03
-    Bluetooth = 0x04
-    Zigbee = 0x05
-    Jtag = 0x06
-    SWD = 0x07
-    I2C = 0x08
-    SPI = 0x09
-    TPM = 0x0A
-
-
-class Peripheral(BaseModel):
-    """Base class for all peripherals
-
-    Examples:
-        >>> p = Peripheral()
-        >>> p.name = "MyPeripheral"
-        >>> p.pType = PeripheralType.UART
-        >>> p.pins = {"tx": "P1", "rx": "P2", "gnd": "GND"}
-        >>> print(p)
-        name='MyPeripheral' pins={'tx': 'P1', 'rx': 'P2', 'gnd': 'GND'} pType=<PeripheralType.UART: 1>
-
-    Attributes:
-        name (str): Name of the peripheral
-        pins (Dict[Any, Any]): Dictionary of pin names to their values
-        pType (PeripheralType): Type of the peripheral
-    """
-
-    def __init__(
-        self,
-        name: str = "",
-        pins: Dict[Any, Any] | None = None,
-        pType: PeripheralType | str | int = PeripheralType.Unknown,
-    ) -> None:
-        self.name = name
-        self.pins = dict(pins) if pins else {}
-        if isinstance(pType, PeripheralType):
-            self.pType = pType
-        elif isinstance(pType, str):
-            try:
-                self.pType = PeripheralType[pType]
-            except KeyError:
-                self.pType = PeripheralType.Unknown
-        elif isinstance(pType, int):
-            try:
-                self.pType = PeripheralType(pType)
-            except ValueError:
-                self.pType = PeripheralType.Unknown
-        else:
-            self.pType = PeripheralType.Unknown
+from .basemodels import Peripheral, PeripheralType
 
 
 class UART(Peripheral):
@@ -122,10 +90,115 @@ class UART(Peripheral):
         self.com_port = (
             comPort  # Port connected to the user's device to speak to the UART
         )
-        if pins:
-            self.tx = pins["tx"]
-            self.rx = pins["rx"]
-            self.gnd = pins["gnd"]
+
+        super().__init__(name, pins, pType)
+
+
+class Wifi(Peripheral):
+    """Class that defines the Wifi interface"""
+
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.Wifi,
+        SSID: str = "",
+        password: str = "",
+        encryption: str = "WPA2",
+        band: str = "2.4GHz",
+        ipaddress: str
+        | ipaddress.IPv4Address
+        | ipaddress.IPv6Address
+        | None = "127.0.0.1",
+    ) -> None:
+        self.pType = pType
+        self.SSID = SSID
+        self.password = password
+        self.encryption = encryption
+        self.band = band
+        self.ipaddress = ipaddress
+
+        super().__init__(name, pins, pType)
+
+
+class ethernet(Peripheral):
+    """Class that defines the Ethernet interface.
+
+    This class can be used to define the Ethernet peripheral of a device, including
+    its MAC address, IP address, subnet mask, gateway, DNS server, speed, and duplex mode.
+    Pins can also be defined for the peripheral. The usual pins found on ethernet connectors are:
+    RXD0, RXD1, RXD2, RXD3, TXD0, TXD1, TXD2, TXD3, RX_DV, LED1, RX_CLK, TX_CLK, TXEN, MDIO, MDC.
+
+    Examples:
+        >>> pins = {
+        ...     "RXD0": "P1",
+        ...     "RXD1": "P2",
+        ...     "RXD2": "P3",
+        ...     "RXD3": "P4",
+        ...     "TXD0": "P5",
+        ...     "TXD1": "P6",
+        ...     "TXD2": "P7",
+        ...     "TXD3": "P8",
+        ...     "RX_DV": "P9",
+        ...     "LED1": "P10",
+        ...     "RX_CLK": "P11",
+        ...     "TX_CLK": "P12",
+        ...     "TXEN": "P13",
+        ...     "MDIO": "P14",
+        ...     "MDC": "P15",
+        ...     "GND": "GND",
+        ...     "VCC": "VCC",
+        ... }
+        >>> eth = ethernet(
+        ...     name="eth0",
+        ...     pins=pins,
+        ...     mac_address="00:11:22:33:44:55",
+        ...     ipaddress=""
+        ...     subnet_mask=""
+        ...     gateway=""
+        ...     dns=""
+        ...     speed="1Gbps"
+        ...     duplex="full"
+        ... )
+        >>> print(eth)
+        name='eth0' pins={'RXD0': 'P1', 'RXD1': 'P2', 'RXD2': 'P3', 'RXD3': 'P4', 'TXD0': 'P5', 'TXD1': 'P6',
+        'TXD2': 'P7', 'TXD3': 'P8', 'RX_DV': 'P9', 'LED1': 'P10', 'RX_CLK': 'P11', 'TX_CLK': 'P12', 'TXEN': 'P13',
+        'MDIO': 'P14', 'MDC': 'P15', 'GND': 'GND', 'VCC': 'VCC'} pType=<PeripheralType.Ethernet: 2>
+
+    Attributes:
+        name (str): Name of the peripheral
+        pins (Dict[Any, Any]): Dictionary of pin names to their values
+        pType (PeripheralType): Type of the peripheral
+        mac_address (str): MAC address of the Ethernet interface
+        ipaddress (ipaddress.IPv4Address | ipaddress.IPv6Address | None): IP address of the Ethernet interface
+        subnet_mask (ipaddress.IPv4Address | ipaddress.IPv6Address | None): Subnet mask of the Ethernet interface
+        gateway (ipaddress.IPv4Address | ipaddress.IPv6Address | None): Gateway of the Ethernet interface
+        dns (ipaddress.IPv4Address | ipaddress.IPv6Address | None): DNS server of the Ethernet interface
+        speed (str): Speed of the Ethernet interface (e.g., "10Mbps", "100Mbps", "1Gbps")
+        duplex (str): Duplex mode of the Ethernet interface ("half" or "full")
+    """
+
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.Ethernet,
+        mac_address: str = "",
+        ipaddress: str | ipaddress.IPv4Address | ipaddress.IPv6Address | None = None,
+        subnet_mask: str | ipaddress.IPv4Network | ipaddress.IPv6Network | None = None,
+        gateway: str | ipaddress.IPv4Address | ipaddress.IPv6Address | None = None,
+        dns: str | ipaddress.IPv4Address | ipaddress.IPv6Address | None = None,
+        speed: str = "1Gbps",
+        duplex: str = "full",
+    ) -> None:
+        self.pType = pType
+        self.mac_address = mac_address
+        self.ipaddress = ipaddress
+        self.subnet_mask = subnet_mask
+        self.gateway = gateway
+        self.dns = dns
+        self.speed = speed
+        self.duplex = duplex
 
         super().__init__(name, pins, pType)
 

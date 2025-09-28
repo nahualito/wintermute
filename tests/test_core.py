@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from wintermute import core
+from wintermute.findings import Risk, Vulnerability
 
 # ------------------------
 # Helpers
@@ -94,8 +95,8 @@ def test_operation_to_dict_and_from_dict() -> None:
     op2 = core.Operation.from_dict(d)
     assert isinstance(op2.devices[0], core.Device)
     assert isinstance(op2.devices[0].services[0], core.Service)
-    assert isinstance(op2.devices[0].services[0].vulnerabilities[0], core.Vulnerability)
-    assert isinstance(op2.devices[0].services[0].vulnerabilities[0].risk, core.Risk)
+    assert isinstance(op2.devices[0].services[0].vulnerabilities[0], Vulnerability)
+    assert isinstance(op2.devices[0].services[0].vulnerabilities[0].risk, Risk)
 
 
 def test_operation_save_and_load(tmp_path: Path, monkeypatch: Any) -> None:

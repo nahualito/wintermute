@@ -1,5 +1,27 @@
 # -*- coding: utf-8 -*-
 # pragma pylint: disable=unused-argument, no-self-use, line-too-long
+#
+# MIT License
+#
+# Copyright (c) 2024,2025 Enrique Alfonso Sanchez Montellano (nahualito)
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
 """
 Core classes for OnoSendai
@@ -9,283 +31,17 @@ This file contains the core classes for the onoSendai deck, these are not going 
 to the deck, they are for internal deck use.
 """
 
-import inspect
 import ipaddress
 import json
 import re
 import uuid
 from datetime import datetime
-from enum import Enum
-from typing import Any, Callable, Dict, Self, Sequence, Type
+from typing import Any, Dict, Sequence
 
 from tinydb import TinyDB
 
-
-class BaseModel:
-    """Base class for all models to provide common functionality.
-
-    This class provides common functionality for all models, including serialization
-    to/from dict, equality comparison, and hashing.
-
-    Examples:
-        >>> import core
-        >>> r = core.Risk(likelihood="High", impact="High", severity="Critical")
-        >>> d = r.to_dict()
-        >>> d["severity"]
-        'Critical'
-        >>> r2 = core.Risk.from_dict(d)
-        >>> r == r2
-        True
-
-    Attributes:
-        * __schema__ (dict): Schema defining sub-objects for serialization/deserialization
-    """
-
-    __schema__: dict[str, Any] = {}
-
-    JSON_ADAPTERS: Dict[Type[Any], Callable[[Any], Any]] = {
-        ipaddress.IPv4Address: str,
-        ipaddress.IPv6Address: str,
-    }
-
-    @staticmethod
-    def _jsonify(value: Any) -> Any:
-        """Default recursive serializer used by to_dict()."""
-        if isinstance(value, BaseModel):
-            return value.to_dict()
-        if isinstance(value, list):
-            return [BaseModel._jsonify(v) for v in value]
-        if isinstance(value, Enum):
-            return value.name
-        # Built-in adapters
-        for typ, adapter in BaseModel.JSON_ADAPTERS.items():
-            if isinstance(value, typ):
-                return adapter(value)
-        # Let subclasses try custom conversions
-        extra = BaseModel._jsonify_extra(value)
-        if extra is not None:
-            return extra
-        return value
-
-    @staticmethod
-    def _jsonify_extra(value: Any) -> Any:
-        """Hook for subclasses to override when they need custom conversions.
-        Return None to indicate 'not handled'."""
-        return None
-
-    def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for k, v in self.__dict__.items():
-            if k.startswith("_"):
-                continue  # skip private/internal fields (e.g., DB handles)
-            out[k] = BaseModel._jsonify(v)
-        return out
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Self:
-        if not isinstance(data, dict):
-            raise TypeError(f"Expected dict for {cls.__name__}, got {type(data)}")
-
-        # 1) Normalize nested fields declared in __schema__ (dicts -> objects, lists -> list[objects])
-        normalized: dict[str, Any] = {}
-        schema = getattr(cls, "__schema__", {})
-
-        for key, val in data.items():
-            if key in schema:
-                subcls = schema[key]
-                if isinstance(val, list):
-                    out_list = []
-                    for v in val:
-                        if isinstance(v, dict):
-                            out_list.append(subcls.from_dict(v))
-                        elif isinstance(v, subcls):
-                            out_list.append(v)
-                        else:
-                            raise TypeError(
-                                f"Unexpected type in list for {key}: {type(v)}"
-                            )
-                    normalized[key] = out_list
-                elif isinstance(val, dict):
-                    normalized[key] = subcls.from_dict(val)
-                elif isinstance(val, subcls):
-                    normalized[key] = val
-                else:
-                    raise TypeError(f"Unexpected type for {key}: {type(val)}")
-            else:
-                normalized[key] = val
-
-        # 2) Only pass kwargs that the constructor actually accepts
-        sig = inspect.signature(cls)
-        accepted_names = {
-            p.name
-            for p in sig.parameters.values()
-            if p.kind
-            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-        }
-        ctor_kwargs = {k: v for k, v in normalized.items() if k in accepted_names}
-
-        # 3) Construct
-        obj = cls(**ctor_kwargs)
-
-        # 4) Set any remaining fields (derived attrs like tx/rx/gnd, mosi/miso/etc.)
-        for k, v in normalized.items():
-            if k not in ctor_kwargs:
-                setattr(obj, k, v)
-
-        return obj
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, self.__class__) and self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash(json.dumps(self.to_dict(), sort_keys=True))
-
-
-class ReproductionStep(BaseModel):
-    """This class holds a reproduction step for vulnerabilities
-
-    This class holds a reproduction step for vulnerabilities, it can contain
-    the tool used, action taken, confidence level and arguments passed to the tool.
-
-    Examples:
-        >>> import core
-        >>> rs = core.ReproductionStep(
-        ...     tool="nmap",
-        ...     action="scan",
-        ...     confidence=5,
-        ...     arguments=["-sV", "-script=vuln"],
-        ... )
-        >>> print(rs.tool)
-        nmap
-        >>> print(rs.confidence)
-        5
-        >>> print(rs.arguments)
-        ['-sV', '-script=vuln']
-
-    Attributes:
-        * tool (str): Tool used in the reproduction step
-        * action (str): Action taken in the reproduction step
-        * confidence (int): Confidence level of the reproduction step (0-10)
-        * arguments (array): Array of arguments passed to the tool
-        * vulnOutput (str): Output from the vulnerability scan
-        * fixOutput (str): Output from the fix attempt
-    """
-
-    def __init__(self) -> None:
-        self.tool = None
-        self.action = None
-        self.confidence = 0
-        self.arguments: Sequence[str] = []
-        self.vulnOutput = None
-        self.fixOutput = None
-        pass
-
-
-class Risk(BaseModel):
-    """This class defines and holds the Risks, it inherits from the Vulns
-
-    This class defines the risk for the vulnerability is assigned to, is designed to
-    be used by a vulnerability itself
-
-    Examples:
-        >>> import core
-        >>> r = core.Risk(likelihood="High", impact="High", severity="Critical")
-        >>> print(r.severity)
-        Critical
-        >>> print(r.likelihood)
-        High
-        >>> print(r.impact)
-        High
-
-    Attributes:
-        * likelihood (str): Likelihood of the vulnerability
-        * impact (str): Impact of the vulnerability
-        * severity (str): Severity of the vulnerability
-    """
-
-    def __init__(
-        self, likelihood: str = "Low", impact: str = "Low", severity: str = "Low"
-    ) -> None:
-        self.likelihood = likelihood
-        self.impact = impact
-        self.severity = severity
-
-
-class Vulnerability(BaseModel):
-    """This class holds a vulnerability found
-
-    This class holds a vulnerability found during the operation, it can contain
-    reproduction steps and a risk object.
-
-    Examples:
-        >>> import core
-        >>> v = core.Vulnerability(
-        ...     title="CVE-2020-1234", description="Example vuln", cvss=7
-        ... )
-        >>> print(v.title)
-        CVE-2020-1234
-        >>> print(v.cvss)
-        7
-        >>> v.setRisk(likelihood="High", impact="High", severity="Critical")
-        >>> print(v.risk.severity)
-        Critical
-
-    Attributes:
-        * title (str): Title of the vulnerability
-        * description (str): Description of the vulnerability
-        * threat (str): Threat posed by the vulnerability
-        * cvss (int): CVSS score of the vulnerability
-        * mitigation (bool): Whether there is a mitigation available
-        * fix (bool): Whether there is a fix available
-        * fix_desc (str): Description of the fix
-        * mitigation_desc (str): Description of the mitigation
-        * risk (Risk): Risk object associated with the vulnerability
-        * verified (bool): Whether the vulnerability has been verified
-        * reproduction_steps (array): Array of ReproductionStep objects detailing how to reproduce the vuln
-
-    """
-
-    __schema__ = {
-        "risk": Risk,
-        "reproduction_steps": ReproductionStep,
-    }
-
-    def __init__(
-        self,
-        title: str = "",
-        description: str = "",
-        threat: str = "",
-        cvss: int = 0,
-        mitigation: bool = True,
-        fix: bool = True,
-        fix_desc: str = "",
-        mitigation_desc: str = "",
-        risk: Dict[Any, Any] | Risk = {},
-        verified: bool = False,
-        reproduction_steps: list[ReproductionStep] | None = None,
-    ) -> None:
-        self.title = title
-        self.description = description
-        self.threat = threat
-        self.cvss = cvss
-        self.mitigation = mitigation  # Boolean
-        self.fix = fix  # Boolean
-        self.mitigation_desc = mitigation_desc
-        self.fix_desc = fix_desc
-        self.verified = verified  # If exploited or high confidence this will be true
-        self.reproduction_steps = reproduction_steps or []
-
-        if isinstance(risk, Risk):
-            self.risk = risk
-        elif isinstance(risk, dict):
-            self.risk = Risk.from_dict(risk)
-        else:
-            self.risk = Risk()
-
-    def setRisk(
-        self, likelihood: str = "Low", impact: str = "Low", severity: str = "Low"
-    ) -> None:
-        self.risk = Risk(likelihood=likelihood, impact=impact, severity=severity)
+from .basemodels import BaseModel, Peripheral
+from .findings import Vulnerability
 
 
 class Service(BaseModel):
@@ -397,11 +153,15 @@ class Device(BaseModel):
         * macaddr (str): mac address
         * operatingsystem (str): Operating System (ENUM based on a dictionary)
         * fqdn (str): Fully Qualified Domain name
+        * architecture (str): Architecture of the machine (x86, x64, ARM, etc)
+        * chipset (str): Chipset of the machine (Maxis, ARM7, Cortex, etc)
         * services (array): Array of Service objects holding the open services on the machine.
+        * peripherals (array): Array of Peripheral objects connected to the machine.
     """
 
     __schema__ = {
         "services": Service,
+        "peripherals": Peripheral,
     }
 
     def __init__(
@@ -414,7 +174,10 @@ class Device(BaseModel):
         macaddr: str = "",
         operatingsystem: str = "",
         fqdn: str = "",
+        architecture: str = "",
+        chipset: str = "",
         services: list[Service] | list[dict[str, Any]] | None = None,
+        peripherals: list[Peripheral] | list[dict[str, Any]] | None = None,
     ) -> None:
         self.hostname = hostname
         if isinstance(ipaddr, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
@@ -424,9 +187,18 @@ class Device(BaseModel):
         self.macaddr = macaddr
         self.operatingsystem = operatingsystem
         self.fqdn = fqdn
+        self.architecture = architecture
+        self.chipset = chipset
         self.services: list[Service] = []
+        self.peripherals: list[Peripheral] = []
+
         for s in services or []:
             self.services.append(Service.from_dict(s) if isinstance(s, dict) else s)
+
+        for p in peripherals or []:
+            self.peripherals.append(
+                Peripheral.from_dict(p) if isinstance(p, dict) else p
+            )
 
     def addService(
         self,
@@ -733,7 +505,11 @@ class Operation(BaseModel):
         * start_date (str): Start date of the pentest in the form of MM/DD/YY
         * end_date (str): End date of the pentest in the form of MM/DD/YY
         * users (array): Array of User objects to be held by the operation/pentest (stakeholders, devs, etc)
-
+        * awsaccounts (array): Array of AWSAccount objects to hold AWS accounts involved in the operation
+        * operation_id (str): Unique ID for the operation, this is a UUID4 string
+        * ticket (str): Ticket ID for the operation
+        * start_date (str): Start date of the operation in MM/DD/YYYY format
+        * end_date (str): End date of the operation in MM/DD/YYYY format
     """
 
     __schema__ = {
@@ -783,13 +559,13 @@ class Operation(BaseModel):
 
     @property
     def dbOperation(self) -> TinyDB:
-        return self.db
+        return self._db
 
     @dbOperation.setter
     def dbOperation(self, value: str) -> None:
         if value is not None:
             self.operation_name = value
-            self.db = TinyDB(f"{value}.json")
+            self._db = TinyDB(f"{value}.json")
 
     def addAnalyst(self, name: str, userid: str, email: str) -> bool:
         """Add an analyst to the operation"""
@@ -797,6 +573,14 @@ class Operation(BaseModel):
         if a not in self.analysts:
             self.analysts.append(a)
             return True
+        return False
+
+    def delAnalyst(self, userid: str) -> bool:
+        """Delete an analyst from the operation by userid"""
+        for a in self.analysts:
+            if a.userid == userid:
+                self.analysts.remove(a)
+                return True
         return False
 
     def addDevice(
@@ -807,6 +591,14 @@ class Operation(BaseModel):
         if d not in self.devices:
             self.devices.append(d)
             return True
+        return False
+
+    def delDevice(self, hostname: str) -> bool:
+        """Delete a device from the operation by hostname"""
+        for d in self.devices:
+            if d.hostname == hostname:
+                self.devices.remove(d)
+                return True
         return False
 
     def addUser(
@@ -834,12 +626,28 @@ class Operation(BaseModel):
             return True
         return False
 
+    def delUser(self, uid: str) -> bool:
+        """Delete a user from the operation by uid"""
+        for u in self.users:
+            if u.uid == uid:
+                self.users.remove(u)
+                return True
+        return False
+
     def addAWSAccount(self, accountId: str, name: str, description: str = "") -> bool:
         """Add an AWS Account to the operation"""
         a = AWSAccount(accountId, name, description)
         if a not in self.awsaccounts:
             self.awsaccounts.append(a)
             return True
+        return False
+
+    def delAWSAccount(self, accountId: str) -> bool:
+        """Delete an AWS Account from the operation by accountId"""
+        for a in self.awsaccounts:
+            if a.accountId == accountId:
+                self.awsaccounts.remove(a)
+                return True
         return False
 
     def save(self) -> None:
