@@ -67,7 +67,7 @@ jobs:
             echo "Versions do not match." && exit 1
           fi
       - name: Run Hatch script for code quality checks
-        run: hatch run -- ${{ env.HATCH_ENV }}:check
+        run: hatch run ${{ env.HATCH_ENV }}:check
       - name: Run tests
         run: hatch run coverage run
       - name: Enforce test coverage
