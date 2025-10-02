@@ -32,7 +32,7 @@ from ..findings import ReproductionStep, Risk, Vulnerability
 
 class SupportsVulns(Protocol):
     """Any object that has a .vulnerabilities: list[Vulnerability].
-    
+
 
     Examples:
         >>> import wintermute.peripherals
@@ -41,7 +41,7 @@ class SupportsVulns(Protocol):
         ...     get_vulnerability,
         ...     remove_vulnerability,
         ...     add_reproduction_step,
-        ...     )
+        ... )
         >>> uart = UART(name="UART0")
         >>> v = add_vulnerability(
         ...     uart,
@@ -63,7 +63,7 @@ class SupportsVulns(Protocol):
         ... )
         True
         >>> remove_vulnerability(uart, title="UART console exposed")
-        True    
+        True
     """
 
     vulnerabilities: List[Vulnerability]

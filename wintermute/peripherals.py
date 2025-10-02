@@ -233,7 +233,7 @@ class JTAG(Peripheral):
         gnd (str): Pin name for GND
         vcc (str): Pin name for VCC
     """
-    
+
     def __init__(
         self,
         name: str = "",
@@ -258,6 +258,7 @@ class JTAG(Peripheral):
             self.vcc = pins["vcc"] if pins["vcc"] else ""
 
         super().__init__(name, pins, pType)
+
 
 class TPM_register(Enum):
     TPM_ACCESS = 0x0000

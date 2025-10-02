@@ -103,6 +103,11 @@ format = [
   "npx -s -y prettier@'^3.4' . --write",
 ]
 
+[tool.hatch.envs.dev]
+dependencies = [
+  "pylink-square @ git+https://github.com/square/pylink.git#egg=pylink-square",
+]
+
 [tool.hatch.envs.production]
 dev-mode = false
 features = []

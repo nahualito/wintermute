@@ -163,7 +163,7 @@ class PeripheralType(Enum):
     Wifi = 0x03
     Bluetooth = 0x04
     Zigbee = 0x05
-    Jtag = 0x06
+    JTAG = 0x06
     SWD = 0x07
     I2C = 0x08
     SPI = 0x09
