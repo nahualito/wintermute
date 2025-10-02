@@ -203,6 +203,62 @@ class ethernet(Peripheral):
         super().__init__(name, pins, pType)
 
 
+class JTAG(Peripheral):
+    """Class that defines the JTAG interface
+
+    Examples:
+        >>> pins = {
+        ...     "tck": "P1",
+        ...     "tdi": "P2",
+        ...     "tdo": "P3",
+        ...     "tms": "P4",
+        ...     "trst": "P5",
+        ...     "gnd": "GND",
+        ...     "vcc": "VCC",
+        ... }
+        >>> j = JTAG(name="jtag1", pins=pins)
+        >>> print(j)
+        name='jtag1' pins={'tck': 'P1', 'tdi': 'P2', 'tdo': 'P3', 'tms': 'P4', 'trst': 'P5', 'gnd': 'GND', 'vcc': 'VCC'} pType=<PeripheralType.JTAG: 3>
+        >>> print(j.tck, j.tdi, j.tdo, j.tms, j.trst, j.gnd, j.vcc)
+        P1 P2 P3 P4 P5 GND VCC
+    Attributes:
+        name (str): Name of the peripheral
+        pins (Dict[Any, Any]): Dictionary of pin names to their values
+        pType (PeripheralType): Type of the peripheral
+        tck (str): Pin name for TCK
+        tdi (str): Pin name for TDI
+        tdo (str): Pin name for TDO
+        tms (str): Pin name for TMS
+        trst (str): Pin name for TRST
+        gnd (str): Pin name for GND
+        vcc (str): Pin name for VCC
+    """
+    
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.JTAG,
+    ) -> None:
+        self.tck: str = ""
+        self.tdi: str = ""
+        self.tdo: str = ""
+        self.tms: str = ""
+        self.trst: str = ""
+        self.gnd: str = ""
+        self.vcc: str = ""
+        self.pType = pType
+        if pins:
+            self.tck = pins["tck"] if pins["tck"] else ""
+            self.tdi = pins["tdi"] if pins["tdi"] else ""
+            self.tdo = pins["tdo"] if pins["tdo"] else ""
+            self.tms = pins["tms"] if pins["tms"] else ""
+            self.trst = pins["trst"] if pins["trst"] else ""
+            self.gnd = pins["gnd"] if pins["gnd"] else ""
+            self.vcc = pins["vcc"] if pins["vcc"] else ""
+
+        super().__init__(name, pins, pType)
+
 class TPM_register(Enum):
     TPM_ACCESS = 0x0000
     TPM_STS = 0x0001

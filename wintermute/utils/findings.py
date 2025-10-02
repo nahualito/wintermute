@@ -31,7 +31,40 @@ from ..findings import ReproductionStep, Risk, Vulnerability
 
 
 class SupportsVulns(Protocol):
-    """Any object that has a .vulnerabilities: list[Vulnerability]."""
+    """Any object that has a .vulnerabilities: list[Vulnerability].
+    
+
+    Examples:
+        >>> import wintermute.peripherals
+        >>> from wintermute.utils.findings import (
+        ...     add_vulnerability,
+        ...     get_vulnerability,
+        ...     remove_vulnerability,
+        ...     add_reproduction_step,
+        ...     )
+        >>> uart = UART(name="UART0")
+        >>> v = add_vulnerability(
+        ...     uart,
+        ...     title="UART console exposed",
+        ...     description="The UART console is exposed and allows access to the system.",
+        ...     cvss=7,
+        ...     risk={"likelihood": "High", "impact": "High", "severity": "Critical"},
+        ... )
+        >>> add_reproduction_step(
+        ...     uart,
+        ...     title="UART console exposed",
+        ...     step={
+        ...         "title": "Probe pins",
+        ...         "description": "Connect to T/RX/GND at 115200 8N1 and observe root prompt.",
+        ...         "tool": "USB-UART",
+        ...         "action": "connect",
+        ...         "confidence": 90,
+        ...     },
+        ... )
+        True
+        >>> remove_vulnerability(uart, title="UART console exposed")
+        True    
+    """
 
     vulnerabilities: List[Vulnerability]
 
