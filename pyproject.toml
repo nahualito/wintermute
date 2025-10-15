@@ -21,7 +21,10 @@ dependencies = [
   "importlib",
   "typing",
   "logging",
-  "datetime"
+  "datetime",
+  "bs4",
+  "xlsxwriter",
+  "lxml",
 ]
 description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]
@@ -120,6 +123,11 @@ path = "wintermute/__init__.py"
 files = ["**/*.py"]
 show_error_codes = true
 strict = true
+
+# Tell mypy to ignore missing type hints for these 3rd-party libs
+[[tool.mypy.overrides]]
+module = "xlsxwriter.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-q"

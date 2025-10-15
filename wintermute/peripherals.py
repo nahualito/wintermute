@@ -33,11 +33,14 @@ and attacking.
 """
 
 import ipaddress
+import logging
 import struct
 from enum import Enum
 from typing import Any, Dict
 
 from .basemodels import Peripheral, PeripheralType
+
+log = logging.getLogger(__name__)
 
 
 class UART(Peripheral):
@@ -79,9 +82,6 @@ class UART(Peripheral):
         stopbits: int = 1,
         comPort: str = "",
     ) -> None:
-        self.tx = ""
-        self.rx = ""
-        self.gnd = ""
         self.baudrate = baudrate
         self.bytesize = bytesize
         self.parity = parity
@@ -121,7 +121,7 @@ class Wifi(Peripheral):
         super().__init__(name, pins, pType)
 
 
-class ethernet(Peripheral):
+class Ethernet(Peripheral):
     """Class that defines the Ethernet interface.
 
     This class can be used to define the Ethernet peripheral of a device, including
@@ -225,13 +225,6 @@ class JTAG(Peripheral):
         name (str): Name of the peripheral
         pins (Dict[Any, Any]): Dictionary of pin names to their values
         pType (PeripheralType): Type of the peripheral
-        tck (str): Pin name for TCK
-        tdi (str): Pin name for TDI
-        tdo (str): Pin name for TDO
-        tms (str): Pin name for TMS
-        trst (str): Pin name for TRST
-        gnd (str): Pin name for GND
-        vcc (str): Pin name for VCC
     """
 
     def __init__(
@@ -240,22 +233,27 @@ class JTAG(Peripheral):
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.JTAG,
     ) -> None:
-        self.tck: str = ""
-        self.tdi: str = ""
-        self.tdo: str = ""
-        self.tms: str = ""
-        self.trst: str = ""
-        self.gnd: str = ""
-        self.vcc: str = ""
         self.pType = pType
-        if pins:
-            self.tck = pins["tck"] if pins["tck"] else ""
-            self.tdi = pins["tdi"] if pins["tdi"] else ""
-            self.tdo = pins["tdo"] if pins["tdo"] else ""
-            self.tms = pins["tms"] if pins["tms"] else ""
-            self.trst = pins["trst"] if pins["trst"] else ""
-            self.gnd = pins["gnd"] if pins["gnd"] else ""
-            self.vcc = pins["vcc"] if pins["vcc"] else ""
+        self.name = name
+        super().__init__(name, pins, pType)
+
+
+class Bluetooth(Peripheral):
+    """Class that defines the Bluetooth interface"""
+
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.Bluetooth,
+        device_name: str = "",
+        mac_address: str = "",
+        paired_devices: list[str] = [],
+    ) -> None:
+        self.pType = pType
+        self.device_name = device_name
+        self.mac_address = mac_address
+        self.paired_devices = paired_devices
 
         super().__init__(name, pins, pType)
 
@@ -329,14 +327,6 @@ class TPM(Peripheral):
         name (str): Name of the peripheral
         pins (Dict[Any, Any]): Dictionary of pin names to their values
         pType (PeripheralType): Type of the peripheral
-        mosi (str): Pin name for MOSI
-        miso (str): Pin name for MISO
-        sclk (str): Pin name for SCLK
-        gnd (str): Pin name for GND
-        cs (str): Pin name for CS
-        rst (str): Pin name for RST
-        pirq (str): Pin name for PIRQ
-        vcc (str): Pin name for VCC
     """
 
     def __init__(
@@ -352,25 +342,6 @@ class TPM(Peripheral):
             pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
             pType (PeripheralType): Type of the peripheral, defaults to PeripheralType.TPM.
         """
-        self.mosi: str = ""
-        self.miso: str = ""
-        self.sclk: str = ""
-        self.gnd: str = ""
-        self.cs: str = ""
-        self.rst: str = ""
-        self.pirq: str = ""
-        self.vcc: str = ""
-        self.pType = pType
-        if pins:
-            self.mosi = pins["mosi"] if pins["mosi"] else ""
-            self.miso = pins["miso"] if pins["miso"] else ""
-            self.sclk = pins["sclk"] if pins["sclk"] else ""
-            self.gnd = pins["gnd"] if pins["gnd"] else ""
-            self.cs = pins["cs"] if pins["cs"] else ""
-            self.rst = pins["rst"] if pins["rst"] else ""
-            self.pirq = pins["pirq"] if pins["pirq"] else ""
-            self.vcc = pins["vcc"] if pins["vcc"] else ""
-
         super().__init__(name, pins, pType)
 
     def _tpm_input_header(self, tag: int, len: int, code: int) -> bytes:
