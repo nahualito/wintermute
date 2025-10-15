@@ -12,7 +12,7 @@
 Access to console can be done from the `wintermuteConsole` executable
 
 ```bash
-./wintermuteConsole
+./wintermuteREPL
 ```
 
 If you want to run in a Docker, the command line is
@@ -27,130 +27,154 @@ The current class structure is the following:
 
 ```mermaid
 classDiagram
-Vulnerability <-- Risk
-Service <-- Vulnerability
-Pentest <|-- Operation
-Operation <-- Analyst
-Operation <-- Team
-User <-- Team
-Account <-- Team
-User --> Account
-User <-- Device
-Device <-- Service
-wintermute <-- dbController
-wintermute <-- cartridge
-Operation --> wintermute
-Device <-- User
-class wintermute {
-+ prompt
-+ loadedModules
-+ dbController
-+ load()
-+ unload()
-+ set()
-}
-class Operation {
-+ operation_name
-+ db
-+ uuid
-+ analysts[]
-+ devices[]
-+ users[]
-+ ticket
-+ getTicketInformation()
-+ addAnalyst()
-+ addDevice()
-+ addUser()
-+ dbOperation()
-+ toJSON()
-}
-class Pentest {
-+ Application
-+ dataClassification
-+ loadPentest()
-+ save()
-+ toJSON()
-}
-class Analyst {
-+ addAnalyst()
-+ deleteAnalyst()
-+ Name
-+ alias
-+ email
-}
-class Device {
-+ hostname
-+ ipaddr
-+ macaddr
-+ operatingsystem
-+ fqdn
-+ services[]
-+ addService()
-+ toJSON()
-}
-class Service {
-+ protocol
-+ app
-+ portNumber
-+ banner
-+ transport_layer
-+ vulnerabilities[]
-+ addVulnerability()
-+ toJSON()
-}
-class Vulnerability {
-+ title
-+ description
-+ threat
-+ cvss
-+ mitigation
-+ fix
-+ mitigation_desc
-+ fix_desc
-+ verified
-+ risk
-+ setRisk()
-+ to JSON()
-}
-class Risk {
-+ likelihood
-+ impact
-+ severity
-+ toJSON()
-}
-class dbController {
-+ insert()
-+ update()
-+ delete()
-+ dbName
-}
-class cartridge {
-+ name
-}
-class User {
-+ alias
-+ email
-+ groups[]
-+ teams[]
-+ permissions[]
-}
-class Account {
-+ Name
-+ AccountID
-+ Description
-+ Admins[]
-+ Users[]
-}
-class Team {
-+ Name
-+ Manager
-+ Users[]
-+ Accounts[]
-+ CTI
-}
+    %% Core Classes
+    class Operation {
+        +Analysts: List[Analyst]
+        +Devices: List[Device]
+        +Pentests: List[Pentest]
+        +addAnalyst()
+        +addDevice()
+        +addPentest()
+    }
+    class Pentest {
+        +Operation: Operation
+        +Devices: List[Device]
+        +Services: List[Service]
+        +Vulnerabilities: List[Vulnerability]
+    }
+    class Analyst {
+        +name: str
+        +userid: str
+        +email: str
+    }
+    class Device {
+        +name: str
+        +services: List[Service]
+        +peripherals: List[Peripheral]
+    }
+    class Service {
+        +name: str
+        +vulnerabilities: List[Vulnerability]
+    }
+    class Vulnerability {
+        +name: str
+        +risk: Risk
+    }
+    class Risk {
+        +level: str
+        +description: str
+    }
+    class dbController {
+        +connect()
+        +save()
+        +load()
+    }
+    class cartridge {
+        <<interface>>
+        +run()
+    }
+    class User {
+        +username: str
+        +accounts: List[Account]
+    }
+    class Account {
+        +account_id: str
+        +team: Team
+    }
+    class Team {
+        +members: List[User]
+    }
+
+    %% basemodels.py
+    class Peripheral {
+        +name: str
+        +pins: Dict
+        +pType: PeripheralType
+    }
+    class PeripheralType {
+        <<enum>>
+        UART
+        Wifi
+        Ethernet
+    }
+
+    %% peripherals.py
+    class UART {
+        +baudrate: int
+        +bytesize: int
+        +parity: str
+        +stopbits: int
+        +com_port: str
+    }
+    class Wifi {
+        +SSID: str
+        +password: str
+        +encryption: str
+        +band: str
+        +ipaddress: str
+    }
+    class Ethernet {
+        +mac_address: str
+        +ipaddress: str
+        +subnet_mask: str
+        +gateway: str
+        +dns: str
+        +speed: str
+        +duplex: str
+    }
+
+    %% findings.py
+    class Finding {
+        +title: str
+        +description: str
+        +severity: str
+        +references: List[str]
+    }
+
+    %% utils/
+    class ParserUtil {
+        +parse_device()
+        +parse_service()
+    }
+    class FindingUtil {
+        +parse_finding()
+        +format_finding()
+    }
+    class RiskUtil {
+        +calculate_risk()
+    }
+
+    %% Relationships
+    Operation "1" o-- "*" Analyst
+    Operation "1" o-- "*" Device
+    Operation "1" o-- "*" Pentest
+    Pentest "1" o-- "*" Device
+    Pentest "1" o-- "*" Service
+    Pentest "1" o-- "*" Vulnerability
+    Device "1" o-- "*" Service
+    Device "1" o-- "*" Peripheral
+    Service "1" o-- "*" Vulnerability
+    Vulnerability "1" o-- "1" Risk
+    User "1" o-- "*" Account
+    Account "1" o-- "1" Team
+    Team "1" o-- "*" User
+
+    Peripheral <|-- UART
+    Peripheral <|-- Wifi
+    Peripheral <|-- Ethernet
+
+    %% utils relationships (example usage)
+    ParserUtil ..> Device
+    ParserUtil ..> Service
+    FindingUtil ..> Finding
+    RiskUtil ..> Risk
 ```
 
 ## What does it do now?
+
+Wintermute is a hardware offensive framework designed for rapid prototyping and management of security operations, pentests, and device analysis. It provides a modular architecture where users can define and manage operations, analysts, devices, services, vulnerabilities, and risks, all linked through a central data model. The framework supports extensibility via "cartridges," which are plugin-like modules for hardware and offensive extensions (such as TPM 2.0 fuzzing or IoT device analysis). Users interact with Wintermute primarily through its REPL console (./wintermuteConsole), which allows loading and unloading cartridges, managing operations, and executing custom commands in a streamlined workflow.
+
+As a library, Wintermute can be imported into Python projects to leverage its core classes and utilities for building custom security automation, device management, or vulnerability tracking solutions. End users can instantiate and manipulate objects such as Operation, Pentest, Device, and Peripheral directly in code, or use the REPL for interactive management. The framework supports both standard and star-import patterns, exposing modules and classes while keeping the environment clean. Data can be saved and loaded from various database backends, and documentation is provided via Sphinx for easy integration and extension. This makes Wintermute suitable for both interactive use and as a foundation for building advanced security tooling.
 
 The current modules are:
 
@@ -192,7 +216,7 @@ Also it allows for \* importing, this still will only import modules and not the
 ```python
 >>> from wintermute import *
 >>> c = wintermute.wintermute()
->>> f = core.Analyst('Enrique Sanchez', 'nahualito', 'enrique.sanchez@caissa-security.com')
+>>> f = core.Analyst('Enrique Sanchez', 'nahualito', 'nahual@exploit.ninja')
 >>> core.
 core.Analyst(         core.Device(          core.Operation(
 core.Pentest(         core.Query()          core.Service(
