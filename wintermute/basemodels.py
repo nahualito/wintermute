@@ -32,51 +32,59 @@ if TYPE_CHECKING:
 import inspect
 import ipaddress
 import json
+from dataclasses import fields, is_dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Self, Type
 
 
 class BaseModel:
-    """Base class for all models to provide common functionality.
+    """Common serialize/deserialize with adapters & parsers (enum/datetime/IP support)."""
 
-    This class provides common functionality for all models, including serialization
-    to/from dict, equality comparison, and hashing.
+    __schema__: dict[
+        str, Any
+    ] = {}  # field -> BaseModel subclass for nested objects/lists
+    __enums__: dict[
+        str, Type[Enum]
+    ] = {}  # field -> Enum class (for coercion on from_dict)
 
-    Examples:
-        >>> import core
-        >>> r = core.Risk(likelihood="High", impact="High", severity="Critical")
-        >>> d = r.to_dict()
-        >>> d["severity"]
-        'Critical'
-        >>> r2 = core.Risk.from_dict(d)
-        >>> r == r2
-        True
-
-    Attributes:
-        * __schema__ (dict): Schema defining sub-objects for serialization/deserialization
-    """
-
-    __schema__: dict[str, Any] = {}
-
+    # --- Serialization adapters (objects -> JSON scalars) ---
     JSON_ADAPTERS: Dict[Type[Any], Callable[[Any], Any]] = {
         ipaddress.IPv4Address: str,
         ipaddress.IPv6Address: str,
+        datetime: lambda dt: dt.isoformat().replace("+00:00", "Z")
+        if dt.tzinfo
+        else dt.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 
+    # --- Deserialization parsers (JSON scalars -> objects) ---
+    PARSERS: Dict[Type[Any], Callable[[Any], Any]] = {
+        datetime: lambda s: datetime.fromisoformat(str(s).replace("Z", "+00:00")),
+        ipaddress.IPv4Address: lambda s: ipaddress.ip_address(s),
+        ipaddress.IPv6Address: lambda s: ipaddress.ip_address(s),
+    }
+
+    # ---------- to_dict ----------
     @staticmethod
     def _jsonify(value: Any) -> Any:
-        """Default recursive serializer used by to_dict()."""
         if isinstance(value, BaseModel):
             return value.to_dict()
+        if is_dataclass(
+            value
+        ):  # recurse so dataclass fields (e.g., datetime) are adapted
+            return {
+                f.name: BaseModel._jsonify(getattr(value, f.name))
+                for f in fields(value)
+            }
         if isinstance(value, list):
             return [BaseModel._jsonify(v) for v in value]
         if isinstance(value, Enum):
-            return value.name
-        # Built-in adapters
+            return (
+                value.name
+            )  # flip to .value if you prefer the enum values instead of names
         for typ, adapter in BaseModel.JSON_ADAPTERS.items():
             if isinstance(value, typ):
                 return adapter(value)
-        # Let subclasses try custom conversions
         extra = BaseModel._jsonify_extra(value)
         if extra is not None:
             return extra
@@ -84,32 +92,79 @@ class BaseModel:
 
     @staticmethod
     def _jsonify_extra(value: Any) -> Any:
-        """Hook for subclasses to override when they need custom conversions.
-        Return None to indicate 'not handled'."""
+        """Subclass hook: return a JSON-safe object or None to skip."""
         return None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k, v in self.__dict__.items():
             if k.startswith("_"):
-                continue  # skip private/internal fields (e.g., DB handles)
+                continue
             out[k] = BaseModel._jsonify(v)
         return out
 
+    # ---------- from_dict ----------
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         if not isinstance(data, dict):
             raise TypeError(f"Expected dict for {cls.__name__}, got {type(data)}")
 
-        # 1) Normalize nested fields declared in __schema__ (dicts -> objects, lists -> list[objects])
-        normalized: dict[str, Any] = {}
-        schema = getattr(cls, "__schema__", {})
+        schema: dict[str, Any] = getattr(cls, "__schema__", {})
+        enums: dict[str, type[Enum]] = getattr(cls, "__enums__", {})
 
+        # <<< use resolved type hints (handles future-annotations and forward refs)
+        from typing import Union, get_args, get_origin, get_type_hints
+
+        ann: dict[str, Any] = get_type_hints(cls)
+
+        def _resolve_target_type(t: Any) -> type[Any] | None:
+            # already a concrete class?
+            if isinstance(t, type):
+                return t
+            origin = get_origin(t)
+            if origin is None:
+                return None
+            # Optional/Union[...] → pick the first concrete class (e.g., datetime)
+            if origin is Union:
+                for arg in get_args(t):
+                    if isinstance(arg, type):
+                        return arg
+                return None
+            return None
+
+        def coerce_scalar(key: str, val: Any) -> Any:
+            # Enums (opt-in via __enums__)
+            if key in enums:
+                et = enums[key]
+                if isinstance(val, et):
+                    return val
+                if isinstance(val, str):
+                    try:
+                        return et[val]  # by NAME
+                    except KeyError:
+                        for m in et:
+                            if m.value == val:  # by VALUE
+                                return m
+                raise TypeError(
+                    f"Cannot coerce {val!r} to {et.__name__} for field {key}"
+                )
+
+            # Parsers (datetime, IPs, etc.) based on resolved annotation
+            target = _resolve_target_type(ann.get(key))
+            if target is not None:
+                parser = BaseModel.PARSERS.get(target)
+                if parser is not None and not isinstance(val, target):
+                    return parser(val)
+
+            return val
+
+        # 1) Normalize nested fields and coerce direct scalars
+        normalized: dict[str, Any] = {}
         for key, val in data.items():
             if key in schema:
                 subcls = schema[key]
                 if isinstance(val, list):
-                    out_list = []
+                    out_list: list[Any] = []
                     for v in val:
                         if isinstance(v, dict):
                             out_list.append(subcls.from_dict(v))
@@ -127,25 +182,57 @@ class BaseModel:
                 else:
                     raise TypeError(f"Unexpected type for {key}: {type(val)}")
             else:
-                normalized[key] = val
+                normalized[key] = coerce_scalar(key, val)
 
-        # 2) Only pass kwargs that the constructor actually accepts
+        # 2) Filter kwargs to __init__
         sig = inspect.signature(cls)
-        accepted_names = {
+        accepted = {
             p.name
             for p in sig.parameters.values()
             if p.kind
             in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
         }
-        ctor_kwargs = {k: v for k, v in normalized.items() if k in accepted_names}
+        ctor_kwargs = {k: v for k, v in normalized.items() if k in accepted}
 
         # 3) Construct
         obj = cls(**ctor_kwargs)
 
-        # 4) Set any remaining fields (derived attrs like tx/rx/gnd, mosi/miso/etc.)
+        # 4) Set remaining attributes
         for k, v in normalized.items():
             if k not in ctor_kwargs:
                 setattr(obj, k, v)
+
+        # 5) Final safety pass: coerce any annotated scalars left as strings/etc.
+        for k, annot in ann.items():
+            if not hasattr(obj, k):
+                continue
+            cur = getattr(obj, k)
+            # skip nested/containers
+            if isinstance(cur, (BaseModel, list, dict)):
+                continue
+
+            # Enums again if needed
+            if k in enums and isinstance(cur, str):
+                et = enums[k]
+                try:
+                    setattr(obj, k, et[cur])  # by NAME
+                    continue
+                except KeyError:
+                    for m in et:
+                        if m.value == cur:  # by VALUE
+                            setattr(obj, k, m)
+                            break
+                    continue
+
+            # Parsers again with resolved type
+            target = _resolve_target_type(annot)
+            if target is not None:
+                parser = BaseModel.PARSERS.get(target)
+                if parser is not None and not isinstance(cur, target):
+                    try:
+                        setattr(obj, k, parser(cur))
+                    except Exception:
+                        pass
 
         return obj
 
