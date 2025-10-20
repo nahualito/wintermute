@@ -172,12 +172,17 @@ class Ticket(BaseModel, metaclass=TicketMeta):
 
     This class provides a unified interface for creating, reading, updating,
     and commenting on tickets, regardless of the underlying backend system.
-    
+
     Example:
         >>> # Configure once at startup:
         >>> Ticket.register_backend("mem", InMemoryBackend(), make_default=True)
-        >>> Ticket.register_backend("bugzilla", BugzillaBackend(base_url="https://bz.example", api_key="..."))
-        >>> Ticket.register_backend("sf", SalesforceBackend(instance_url="...", access_token="..."))
+        >>> Ticket.register_backend(
+        ...     "bugzilla",
+        ...     BugzillaBackend(base_url="https://bz.example", api_key="..."),
+        ... )
+        >>> Ticket.register_backend(
+        ...     "sf", SalesforceBackend(instance_url="...", access_token="...")
+        ... )
         >>> # App code stays vendor-agnostic:
         >>> tid = Ticket.create(title="Login bug", description="Fails on Safari")
         >>> Ticket.comment(tid, text="Reproduced on 17.0.3", author="qa-bot")
@@ -191,6 +196,7 @@ class Ticket(BaseModel, metaclass=TicketMeta):
         * ticket_id (str): Unique identifier of the ticket.
         * data (TicketData): Core data of the ticket.
         * comments (List[Comment]): List of comments associated with the ticket."""
+
     ticket_id: str
     data: TicketData
     comments: List[Comment] = field(default_factory=list)
