@@ -168,6 +168,29 @@ class TicketMeta(type):
 # --- Ticket class: declare ClassVars + stub classmethods (mypy sees them) ---
 @dataclass
 class Ticket(BaseModel, metaclass=TicketMeta):
+    """Ticket model with backend-agnostic CRUD operations.
+
+    This class provides a unified interface for creating, reading, updating,
+    and commenting on tickets, regardless of the underlying backend system.
+    
+    Example:
+        >>> # Configure once at startup:
+        >>> Ticket.register_backend("mem", InMemoryBackend(), make_default=True)
+        >>> Ticket.register_backend("bugzilla", BugzillaBackend(base_url="https://bz.example", api_key="..."))
+        >>> Ticket.register_backend("sf", SalesforceBackend(instance_url="...", access_token="..."))
+        >>> # App code stays vendor-agnostic:
+        >>> tid = Ticket.create(title="Login bug", description="Fails on Safari")
+        >>> Ticket.comment(tid, text="Reproduced on 17.0.3", author="qa-bot")
+        >>> t = Ticket.read(tid)
+        >>> t.change_status(Status.IN_PROGRESS)
+        >>> # Switch the whole app to Salesforce later without touching call sites:
+        >>> Ticket.use_backend("sf")
+
+
+    Attributes:
+        * ticket_id (str): Unique identifier of the ticket.
+        * data (TicketData): Core data of the ticket.
+        * comments (List[Comment]): List of comments associated with the ticket."""
     ticket_id: str
     data: TicketData
     comments: List[Comment] = field(default_factory=list)
