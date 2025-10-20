@@ -26,6 +26,7 @@ dependencies = [
   "xlsxwriter",
   "lxml",
   "types-requests",
+  "requests",
 ]
 description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]
