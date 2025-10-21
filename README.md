@@ -12,16 +12,28 @@
 Access to console can be done from the `wintermuteConsole` executable
 
 ```bash
-./wintermuteREPL
+./wintermuteConsole
 ```
 
-If you want to run in a Docker, the command line is
+If you want to run in a Docker, make sure you have Docker installed and run:
+
+```bash
+docker build -t wintermute .
+```
+
+And then run:
 
 ```bash
 docker run -it --rm -v $(pwd):/opt/wintermute
 ```
 
+This will add the current folder as a volume to the docker container so you can save your work.
+
 # Design
+
+Wintermute is designed as a modular hardware offensive framework to manage security operations, pentests, and device analysis. The core of Wintermute is built around several key classes that represent the main entities in a security operation, including Operations, Pentests, Analysts, Devices, Services, Vulnerabilities, and Risks. Each class encapsulates relevant attributes and methods to manage its data and relationships with other classes.
+
+The entire framework allows you to create "cartridges," which are modular plugins that can extend the functionality of Wintermute. Cartridges can be developed to add support for specific hardware, protocols, or offensive techniques, making Wintermute a flexible and extensible platform for security professionals. The cartridges can be loaded and unloaded dynamically, allowing users to customize their environment based on the specific requirements of their security operations.
 
 The current class structure is the following:
 
@@ -176,9 +188,31 @@ Wintermute is a hardware offensive framework designed for rapid prototyping and 
 
 As a library, Wintermute can be imported into Python projects to leverage its core classes and utilities for building custom security automation, device management, or vulnerability tracking solutions. End users can instantiate and manipulate objects such as Operation, Pentest, Device, and Peripheral directly in code, or use the REPL for interactive management. The framework supports both standard and star-import patterns, exposing modules and classes while keeping the environment clean. Data can be saved and loaded from various database backends, and documentation is provided via Sphinx for easy integration and extension. This makes Wintermute suitable for both interactive use and as a foundation for building advanced security tooling.
 
-The current modules are:
+The current utility modules are:
+
+- utils.parserUtil: Utilities for parsing device and service information.
+- utils.findingUtil: Utilities for parsing and formatting findings.
+- utils.riskUtil: Utilities for calculating risk levels.
+
+The current backend modules are:
+
+- bugzilla: Bugzilla backend for issue tracking.
+- docxreports: DOCX report generation backend.
+
+The current "cartridges" are:
 
 - tpm20: TPM 2.0 library to talk and setup fuzzing for the TPMs
+
+Currently peripherals supported are:
+
+- UART: Universal Asynchronous Receiver-Transmitter interface for serial communication.
+- Wifi: Wireless network interface for connecting to Wi-Fi networks.
+- Ethernet: Wired network interface for Ethernet connections.
+- JTAG: Joint Test Action Group interface for debugging and programming hardware devices.
+- Bluetooth: Wireless technology for short-range communication between devices.
+- TPM: Trusted Platform Module for secure cryptographic operations and storage.
+
+The framework has abstraction classes such as Ticket() to manage tickets from different backends (Bugzilla, JIRA, etc) and Database backends such as TinyDB, SQLite, or others to store the data. it also supports Report() to manage report generation in different formats (HTML, DOCX, PDF, etc).
 
 ## User requirements
 
@@ -238,13 +272,7 @@ wintermute.with_default_category(
 
 ## wintermute
 
-The following classes and functions are the main entry point for wintermute,
-The hardware offensive framework for fast exploit prototypes Deck.
-
-Cartridges are to be dropped in the cartridges folder and internal classes
-should be dropped into the core file.
-
-**WARNING call out method has changed from python3 -m wintermute into using the binary wintermuteConsole**
+Wintermute's REPL is based in the cmd2 library so it supports all cmd2 features plus wintermute's own commands. It has by default disabled run_script and run_pyscript commands for security reasons but they can be enabled if needed.
 
 ```bash
 nahualito@88665a364f90 > ~/projects/wintermute $ ./wintermuteConsole
@@ -262,7 +290,7 @@ alias  help     macro  run_pyscript  set    shortcuts
 edit   history  quit   run_script    shell  unload
 
 wintermute> load
-Usage: unload [-h] {sshodan, kalamari, DrCiml, nestingpet}
+Usage: unload [-h] {sshodan, kalamari, TPM20, nestingpet}
 Error: the following arguments are required: cmds
 
 wintermute> quit

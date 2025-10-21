@@ -104,6 +104,10 @@
     "bluefalcon",
     "wintermute",
     "pentests",
-    "pentest"
+    "pentest",
+    "docxreports",
+    "UART",
+    "JTAG",
+    "pyscript"
   ]
 }
