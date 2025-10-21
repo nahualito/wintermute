@@ -66,13 +66,17 @@ class DocxTplPerVulnBackend(ReportBackend):
     Uses docxtpl + docxcompose.
 
     Example:
-        >>> from wintermute.reports import Report, ReportSpec 
+        >>> from wintermute.reports import Report, ReportSpec
         >>> from wintermute.backends.docx_reports import DocxTplPerVulnBackend
-        >>> from wintermute.basemodels import CloudAccount, Peripheral 
-        >>> from wintermute.findings import Vulnerability, ReproductionStep, Risk 
+        >>> from wintermute.basemodels import CloudAccount, Peripheral
+        >>> from wintermute.findings import Vulnerability, ReproductionStep, Risk
         >>> Report.register_backend(
         ...     "word_tpl_per_vuln",
-        ...     DocxTplPerVulnBackend(template_dir="templates", main_template="report_main.docx", vuln_template="report_vuln.docx"),
+        ...     DocxTplPerVulnBackend(
+        ...         template_dir="templates",
+        ...         main_template="report_main.docx",
+        ...         vuln_template="report_vuln.docx",
+        ...     ),
         ...     make_default=True,
         ... )
         >>> acct = CloudAccount(
@@ -93,14 +97,19 @@ class DocxTplPerVulnBackend(ReportBackend):
         ...     name="UART0",
         ...     pType="UART",
         ...     vulnerabilities=[
-        ...         Vulnerability(title="No console auth", description="UART console lacks auth", cvss=6, verified=False)
+        ...         Vulnerability(
+        ...             title="No console auth",
+        ...             description="UART console lacks auth",
+        ...             cvss=6,
+        ...             verified=False,
+        ...         )
         ...     ],
         ... )
         >>> spec = ReportSpec(
         ...     title="Security Assessment – Q4",
         ...     author="Enrique",
         ...     summary="Overall posture is improving. Top issues: public S3 access, UART console auth.",
-        ... ) 
+        ... )
         >>> Report.save(spec, [acct, periph], "out.docx")
 
     Attributes:
