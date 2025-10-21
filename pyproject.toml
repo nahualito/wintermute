@@ -27,6 +27,8 @@ dependencies = [
   "lxml",
   "types-requests",
   "requests",
+  "docxtpl",
+  "docxcompose",
 ]
 description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]

@@ -41,7 +41,7 @@ from typing import Any, Dict, Sequence
 
 from tinydb import TinyDB
 
-from .basemodels import BaseModel, Peripheral
+from .basemodels import BaseModel, CloudAccount, Peripheral
 from .findings import Vulnerability
 
 __all__ = [
@@ -307,7 +307,7 @@ class User(BaseModel):
         return False
 
 
-class AWSAccount(BaseModel):
+class AWSAccount(CloudAccount):
     """This class represents an AWS Account that may contain users and vulnerabilities.
 
     This class represents an AWS Account that may contain users and vulnerabilities,
