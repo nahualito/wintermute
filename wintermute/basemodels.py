@@ -22,6 +22,15 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+
+"""
+Base models for Wintermute
+--------------------------
+This file contains the base models used throughout Wintermute, including
+serialization and deserialization logic with support for enums, datetimes,
+and IP addresses.
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

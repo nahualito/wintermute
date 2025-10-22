@@ -24,7 +24,7 @@
 # SOFTWARE.
 
 """
-Peripherals classes for onoSendai
+Peripherals classes for Wintermute
 ----------------------------------
 
 This file contains the peripheral metaclass and the classes that inherit from it

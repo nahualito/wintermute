@@ -24,11 +24,11 @@
 # SOFTWARE.
 
 """
-Core classes for OnoSendai
+Core classes for Wintermute
 ---------------------------
 
-This file contains the core classes for the onoSendai deck, these are not going to be exported
-to the deck, they are for internal deck use.
+This file contains the core classes used throughout Wintermute, including
+Device, Service, User, AWSAccount, Analyst, Operation, and Pentest.
 """
 
 import ipaddress
@@ -291,11 +291,18 @@ class User(BaseModel):
         self.desktops: list[Device] = list(desktops) if desktops else []
         self.ldap_groups: list[str] = list(ldap_groups) if ldap_groups else []
         self.teams: list[str] = []
+        log.debug(
+            f"Initializing User: {self.uid} ldap_groups: {ldap_groups} desktops: {desktops} permissions: {permissions}"
+        )
 
         if teams:
             for team in teams:
                 if team not in self.teams:
                     self.teams.append(team)
+                    log.debug(f"Added team {team} to user {self.uid}")
+        log.info(
+            f"Created User: {self.uid} with teams: {self.teams} and permissions: {self.permissions} with desktops: {len(self.desktops)} and permissions: {self.permissions}"
+        )
 
     def addDesktop(
         self, hostname: str, ipaddr: str, macaddr: str, operatingsystem: str, fqdn: str
@@ -303,6 +310,7 @@ class User(BaseModel):
         d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
         if d not in self.desktops:
             self.desktops.append(d)
+            log.info(f"Added desktop {hostname} to user {self.uid}")
             return True
         return False
 
@@ -357,8 +365,14 @@ class AWSAccount(CloudAccount):
             for v in vulnerabilities:
                 if isinstance(v, dict):
                     self.vulnerabilities.append(Vulnerability.from_dict(v))
+                    log.debug(
+                        f"Rehydrated vulnerability {v.get('title', 'unknown')} for AWSAccount {self.accountId}"
+                    )
                 elif isinstance(v, Vulnerability):
                     self.vulnerabilities.append(v)
+                    log.debug(
+                        f"Added existing vulnerability {v.title} for AWSAccount {self.accountId}"
+                    )
 
         # Rehydrate users
         self.users: list[User] = []
@@ -366,8 +380,14 @@ class AWSAccount(CloudAccount):
             for u in users:
                 if isinstance(u, dict):
                     self.users.append(User.from_dict(u))
+                    log.debug(
+                        f"Rehydrated user {u.get('uid', 'unknown')} for AWSAccount {self.accountId}"
+                    )
                 elif isinstance(u, User):
                     self.users.append(u)
+                    log.debug(
+                        f"Added existing user {u.uid} for AWSAccount {self.accountId}"
+                    )
 
     def addVulnerability(
         self,
