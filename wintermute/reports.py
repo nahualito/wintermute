@@ -276,7 +276,13 @@ def collect_vulnerabilities(
     dict as a Vulnerability if it "looks like" one (has core fields).
     """
     seen: Set[int] = set()
-    SKIP_ATTRS = {"JSON_ADAPTERS", "PARSERS", "__schema__", "__enums__"}
+    SKIP_ATTRS = {
+        "JSON_ADAPTERS",
+        "PARSERS",
+        "__schema__",
+        "__enums__",
+        "vulnerabilities",
+    }
 
     def _looks_like_vuln_dict(d: Any) -> bool:
         if not isinstance(d, dict):
