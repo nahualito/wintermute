@@ -293,9 +293,11 @@ class Peripheral(BaseModel):
         pins: Dict[Any, Any] | None = None,
         pType: PeripheralType | str | int = PeripheralType.Unknown,
         vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
+        workspace: str = "",
     ) -> None:
         self.name = name
         self.pins = dict(pins) if pins else {}
+        self.workspace = workspace
 
         from .findings import Vulnerability as _Vulnerability
 
