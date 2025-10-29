@@ -34,7 +34,10 @@ from bs4.element import Tag
 from ..core import Device, Service, Vulnerability
 
 event_timestamp = (
-    str(datetime.datetime.utcnow()).split(".")[0].replace(" ", "_").replace(":", "-")
+    str(datetime.datetime.now(datetime.UTC))
+    .split(".")[0]
+    .replace(" ", "_")
+    .replace(":", "-")
 )
 
 log = logging.getLogger(__name__)

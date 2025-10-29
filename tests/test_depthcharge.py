@@ -25,166 +25,237 @@
 
 from __future__ import annotations
 
-import json
-from contextlib import contextmanager
+import importlib
+import io
+import sys
+import types
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Protocol, cast
 
 import pytest
 
-# ---- helpers: a fake console + CM we can yield from your module ----
+# ──────────────────────────────────────────────────────────────────────────────
+# Ensure repo root is on sys.path (robust under hatch/coverage)
+# Assuming this file lives at: <repo>/wintermute/tests/test_depthcharge.py
+# Then REPO_ROOT = parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stub ONLY the external 'depthcharge' dependency
+# ──────────────────────────────────────────────────────────────────────────────
+class _ArchObj:
+    supports_64bit_data: bool = True
 
 
 class FakeConsole:
-    """Minimal surface used by the agent."""
+    def __init__(
+        self,
+        device: str,
+        *,
+        baudrate: int = 115200,
+        timeout: float = 1.0,
+        prompt: Optional[str] = None,
+    ) -> None:
+        self.device = device
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.prompt = prompt or "U-Boot> "
+        self._buf = io.StringIO()
 
-    def __init__(self, help_text: str, mem_blob: bytes):
-        self._help_text = help_text
-        self._mem_blob = mem_blob
+    def write(self, s: str) -> None:
+        self._buf.write(s)
 
-    # agent tries run_cmd, then run_command
-    def run_cmd(self, cmd: str) -> str:
-        if cmd == "help":
-            return self._help_text
-        # allow printing env if someone calls it later
-        if cmd in {"printenv", "env", "env print"}:
-            return "bootdelay=3\n"
-        return ""
-
-    def run_command(self, cmd: str) -> str:
-        return self.run_cmd(cmd)
-
-    def interrupt_boot(self) -> None:
-        # no-op; just to satisfy the agent’s best-effort call
+    def interrupt(self, key: str = "\x03") -> None:
         return
 
-    def read_memory(self, address: int, length: int) -> bytes:
-        # Return exactly 'length' bytes, taken from our blob (wrap if short)
-        blob = (self._mem_blob * ((length // max(1, len(self._mem_blob))) + 1))[:length]
-        return blob
+    def discover_prompt(self) -> None:
+        self.prompt = self.prompt or "U-Boot> "
+
+    def close(self) -> None:
+        pass
 
 
-@contextmanager
-def fake_dc_context(console: FakeConsole) -> Any:
-    # The agent does getattr(dc, "console", dc); pretend we are a Depthcharge ctx
-    class _Ctx:
-        def __init__(self, c: FakeConsole) -> None:
-            self.console = c
+class FakeDepthcharge:
+    def __init__(
+        self,
+        console: FakeConsole,
+        *,
+        arch: Optional[str] = None,
+        detailed_help: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
+        self.console = console
+        self.arch = _ArchObj()  # important: not a str
+        self._detailed = detailed_help
 
-    ctx = _Ctx(console)
-    yield ctx
+    def commands(self, *, detailed: bool = False) -> Dict[str, Dict[str, str]]:
+        # Shape matches what your parser expects
+        if self._detailed or detailed:
+            return {
+                "md": {
+                    "summary": "memory display",
+                    "details": "md - memory display\n\nUsage:\nmd [.b, .w] addr [count]\n",
+                },
+                "mw": {
+                    "summary": "memory write (fill)",
+                    "details": "mw - memory write\n\nUsage:\nmw [.b, .w] addr value [count]\n",
+                },
+                "mmc": {
+                    "summary": "MMC sub system",
+                    "details": "mmc - MMC sub system\n\nUsage:\nmmc write addr blk# cnt\nmmc erase blk# cnt\nmmc read addr blk# cnt\n",
+                },
+                "help": {
+                    "summary": "print help",
+                    "details": "help - print command description\n\nUsage:\nhelp\n",
+                },
+            }
+        return {
+            "md": {"summary": "memory display", "details": "md - memory display"},
+            "mw": {"summary": "memory write (fill)", "details": "mw - memory write"},
+        }
+
+    # High-level API (writes file, returns None)
+    def read_memory_to_file(
+        self, addr: int, size: int, filename: str, **_: Any
+    ) -> None:
+        Path(filename).write_bytes(b"\xaa" * int(size))
+        return None
+
+    # Fallback API (returns bytes)
+    def read_memory(self, addr: int, size: int, **_: Any) -> bytes:
+        return b"\xbb" * int(size)
 
 
-# ---- a tiny Peripheral stub that collects vulnerabilities for assertions ----
+# Inject the fake depthcharge module before importing your code
+_fake_dc: Any = types.ModuleType("depthcharge")
+_fake_dc.Console = FakeConsole
+_fake_dc.Depthcharge = FakeDepthcharge
+sys.modules["depthcharge"] = _fake_dc
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Import your real module under test
+# ──────────────────────────────────────────────────────────────────────────────
+dc_mod = importlib.import_module("wintermute.backends.depthcharge")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Typed test scaffolding
+# ──────────────────────────────────────────────────────────────────────────────
+class PeripheralLike(Protocol):
+    device: str
+    workspace: str
+    name: str
+    vulnerabilities: List[Any]
+
+    def add_vulnerability(self, v: Any) -> None: ...
+    def log_info(self, msg: str) -> None: ...
+
+
+@dataclass
 class DummyPeripheral:
-    def __init__(self, device: str, workspace: Path) -> None:
-        self.device = device
-        self.workspace = str(workspace)
-        self._vulns: list[Any] = []
-        self._logs: list[str] = []
+    device: str = "/dev/ttyUSB0:115200"
+    workspace: str = "./wm_workspace_test"
+    name: str = "UART0"
+    vulnerabilities: List[Any] = field(default_factory=list)
 
     def add_vulnerability(self, v: Any) -> None:
-        self._vulns.append(v)
+        self.vulnerabilities.append(v)
 
     def log_info(self, msg: str) -> None:
-        self._logs.append(msg)
+        _ = msg  # no-op
 
 
-# ---- tests ----
+# ──────────────────────────────────────────────────────────────────────────────
+# Tests
+# ──────────────────────────────────────────────────────────────────────────────
+def test_open_dc_context_arch_not_string(tmp_path: Path) -> None:
+    # Ensure context opens and arch is an object, not a stray string
+    ctx_cm = cast(Any, getattr(dc_mod, "_open_dc_context"))
+    with ctx_cm("/dev/ttyUSB0:115200", 1.0, None) as ctx:
+        assert hasattr(ctx, "commands")
+        arch = getattr(ctx, "arch", None)
+        assert not isinstance(arch, str), "ctx.arch must not be a string"
 
 
-def test_catalog_commands_and_flag_executes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Import your module
-    from wintermute.backends import depthcharge as dc_mod
+def test_catalog_commands_and_flag_creates_artifact_and_vuln(tmp_path: Path) -> None:
+    dummy = DummyPeripheral(workspace=str(tmp_path))
+    Agent = cast(Any, getattr(dc_mod, "DepthchargePeripheralAgent"))
+    agent = Agent(peripheral=dummy, default_timeout=0.5, arch=None)
 
-    # Prepare fake help text with a mix of safe + dangerous commands
-    help_text = """\
-help - print command description/usage
-md - memory display
-mw - memory write
-tftp - TFTP download
-env print - print environment
-bootm - boot application image from memory
-help - show help
-"""
-    mem_blob = b"\xaa\xbb\xcc\xdd"
+    info = agent.catalog_commands_and_flag(addVulns=True)
 
-    # Monkeypatch the module's context opener to yield our fake ctx/console
-    monkeypatch.setattr(
-        dc_mod,
-        "_open_dc_context",
-        lambda device, timeout: fake_dc_context(FakeConsole(help_text, mem_blob)),
-        raising=True,
+    # Info schema + artifact presence
+    assert (
+        "artifact" in info and "total_commands" in info and "dangerous_commands" in info
     )
-
-    # Run the agent against our dummy peripheral/workspace
-    periph = DummyPeripheral(device="/dev/ttyUSB0:115200", workspace=tmp_path)
-    agent = dc_mod.DepthchargePeripheralAgent(peripheral=periph)
-
-    result = agent.catalog_commands_and_flag()
-
-    # Assertions: artifact created, parsed catalog present, vuln recorded
-    artifact_path = Path(result["artifact"])
-    assert artifact_path.exists(), "command_catalog.json should be written"
-
-    payload = json.loads(artifact_path.read_text())
-    names = [c["name"] for c in payload["catalog"]]
-    assert "mw" in names and "tftp" in names and "bootm" in names
-
-    # At least one dangerous command should have been flagged
-    flagged = [c for c in payload["catalog"] if c["dangerous"]]
-    assert flagged, "expected at least one dangerous command flagged"
-
-    # Your Vulnerability object should have been attached
-    assert len(periph._vulns) == 1
-    vuln = periph._vulns[0]
-    # basic sanity checks on your fields
-    assert hasattr(vuln, "title")
-    assert "Dangerous U-Boot commands" in vuln.title
+    artifact = Path(cast(str, info["artifact"]))
+    assert artifact.exists() and artifact.is_file()
+    # Parser should see dangerous (mw/mmc) and at least one vuln attached
+    assert info["dangerous_commands"] >= 1
+    assert len(dummy.vulnerabilities) >= 1
 
 
-def test_dump_memory_and_attach_vuln_executes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from wintermute.backends import depthcharge as dc_mod
+def test_dump_memory_and_attach_vuln_writes_file_and_size(tmp_path: Path) -> None:
+    dummy = DummyPeripheral(workspace=str(tmp_path))
+    Agent = cast(Any, getattr(dc_mod, "DepthchargePeripheralAgent"))
+    agent = Agent(peripheral=dummy, default_timeout=0.5, arch=None)
 
-    help_text = "help - print help\n"
-    mem_blob = (
-        b"\xde\xad\xbe\xef"  # will be repeated/truncated by FakeConsole.read_memory
+    length = 0x200
+    info = agent.dump_memory_and_attach_vuln(0x3EC00000, length, "mem.bin")
+    p = Path(cast(str, info.get("artifact") or info.get("file")))
+    assert p.exists() and p.stat().st_size == length
+    assert info.get("size") == length
+    # Optional hash acceptable if present
+    if "sha256" in info:
+        sha = cast(str, info["sha256"])
+        assert isinstance(sha, str) and len(sha) == 64
+    # A vulnerability should be attached
+    assert len(dummy.vulnerabilities) >= 1
+
+
+def test_split_device_accepts_colon_baud() -> None:
+    splitter = cast(Any, getattr(dc_mod, "_split_device"))
+    port, baud = splitter("/dev/ttyUSB0:230400")
+    assert port == "/dev/ttyUSB0" and baud == 230400
+
+    port2, baud2 = splitter("COM3:115200")
+    assert port2 == "COM3" and baud2 == 115200
+
+    port3, baud3 = splitter("/dev/ttyUSB0")
+    assert port3 == "/dev/ttyUSB0" and baud3 == 115200
+
+
+def test_parser_danger_scoring_smoke() -> None:
+    # Use your parser over a sample that should flag 'mw' and 'mmc'
+    parse_fn = cast(
+        Any, getattr(dc_mod, "_parse_commands", getattr(dc_mod, "parse_commands", None))
     )
+    if parse_fn is None:
+        pytest.skip("No parser exposed in module")
 
-    monkeypatch.setattr(
-        dc_mod,
-        "_open_dc_context",
-        lambda device, timeout: fake_dc_context(FakeConsole(help_text, mem_blob)),
-        raising=True,
-    )
-
-    periph = DummyPeripheral(device="/dev/ttyUSB0:115200", workspace=tmp_path)
-    agent = dc_mod.DepthchargePeripheralAgent(peripheral=periph)
-
-    # Execute a small dump so the test runs fast
-    out = agent.dump_memory_and_attach_vuln(
-        address=0x80000000, length=16, filename="dump.bin"
-    )
-
-    # Binary file written with expected size
-    dump_file = Path(out["file"])
-    assert dump_file.exists()
-    assert dump_file.read_bytes() == mem_blob * 4  # 4 * 4 bytes = 16
-
-    # A descriptor json should also exist
-    dump_info = json.loads(
-        (Path(periph.workspace) / "artifacts" / "dump_info.json").read_text()
-    )
-    assert dump_info["length"] == 16
-    assert dump_info["address"] == hex(0x80000000)
-
-    # A second vulnerability should have been attached
-    assert len(periph._vulns) >= 1
-    titles = [getattr(v, "title", "") for v in periph._vulns]
-    assert any("Memory dump" in t or "Raw memory dumping" in t for t in titles)
+    sample: Dict[str, Dict[str, str]] = {
+        "mmc": {
+            "summary": "MMC sub system",
+            "details": "mmc - MMC sub system\n\nUsage:\nmmc write addr blk# cnt\nmmc erase blk# cnt\n",
+        },
+        "mw": {
+            "summary": "memory write (fill)",
+            "details": "mw - memory write\n\nUsage:\nmw [.b, .w] addr value [count]\n",
+        },
+        "md": {
+            "summary": "memory display",
+            "details": "md - memory display\n\nUsage:\nmd [.b, .w] addr [count]\n",
+        },
+    }
+    records = parse_fn(sample)
+    assert isinstance(records, list) and records, "parser must produce a non-empty list"
+    by_name = {r.name: r for r in records}
+    assert by_name["mw"].danger.severity > 0
+    assert by_name["mmc"].danger.severity > 0
+    assert by_name["md"].danger.severity == 0

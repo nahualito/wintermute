@@ -35,7 +35,10 @@ from cmd2 import (
 )
 
 event_timestamp = (
-    str(datetime.datetime.utcnow()).split(".")[0].replace(" ", "_").replace(":", "-")
+    str(datetime.datetime.now(datetime.UTC))
+    .split(".")[0]
+    .replace(" ", "_")
+    .replace(":", "-")
 )
 
 
