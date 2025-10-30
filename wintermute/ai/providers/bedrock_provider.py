@@ -34,7 +34,7 @@ from ..types import ChatRequest, ChatResponse, Message
 
 # Bedrock SDK (boto3). Keep import optional for strict mypy.
 try:
-    import boto3  # type: ignore[import-not-found]
+    import boto3
 except Exception:
     boto3 = None
 
