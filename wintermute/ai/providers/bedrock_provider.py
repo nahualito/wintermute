@@ -35,8 +35,11 @@ from ..types import ChatRequest, ChatResponse, Message
 # Bedrock SDK (boto3). Keep import optional for strict mypy.
 try:
     import boto3
-except Exception:
-    boto3 = None
+except Exception as e:
+    raise ImportError(
+        "BedrockProvider requires boto3. Install with `pip install boto3` "
+        "and ensure AWS credentials are configured."
+    ) from e
 
 
 def _as_bedrock_messages(msgs: list[Message]) -> list[dict[str, object]]:
