@@ -30,6 +30,9 @@ dependencies = [
   "docxtpl",
   "docxcompose",
   "depthcharge>=0.6.0",
+  "boto3",
+  "openai",
+  "groq",
 ]
 description = "Hardware security hacking and auditing library for attack and pentesting automation."
 dynamic = ["version"]

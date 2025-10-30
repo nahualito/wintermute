@@ -27,15 +27,21 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, cast
 
 from ..provider import LLMProvider, ModelInfo
 from ..types import ChatRequest, ChatResponse, ToolCall
 
+# ---- Dynamic import as Any so mypy doesn't enforce vendor overloads ----
 try:
-    import openai  # type: ignore[import-not-found]
+    import importlib as _importlib
+
+    _openai_mod = _importlib.import_module("openai")
+    openai: Any = _openai_mod  # module or client typed as Any
+    _HAS_OPENAI = True
 except Exception:
-    openai = None
+    openai = None  # still fine because var is typed as Any
+    _HAS_OPENAI = False
 
 
 @dataclass
@@ -55,18 +61,26 @@ class OpenAIProvider(LLMProvider):
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
-        if openai is None:
-            content = "(mock openai) " + (
+        # Mock path (SDK not present)
+        if not _HAS_OPENAI:
+            mock_text = "(mock openai) " + (
                 req.messages[-1].content if req.messages else ""
             )
             return ChatResponse(
-                content=content,
+                content=mock_text,
                 model=req.model or self._default_model,
                 provider=self.name,
             )
 
-        client = openai  # OpenAI’s global client is configured via env var
-        tools_payload = None
+        # Real path (keep everything as Any to satisfy mypy)
+        client: Any = openai
+        if self.api_key:
+            try:
+                client.api_key = self.api_key
+            except Exception:
+                pass
+
+        tools_payload: Any = None
         if req.tools:
             tools_payload = [
                 {
@@ -81,47 +95,52 @@ class OpenAIProvider(LLMProvider):
             ]
 
         start = time.time()
-        resp = client.chat.completions.create(
+        completion: Any = cast(Any, client.chat.completions).create(
             model=req.model or self._default_model,
-            messages=[m.__dict__ for m in req.messages],
+            messages=cast(Any, [m.__dict__ for m in req.messages]),
             temperature=req.temperature,
             max_tokens=req.max_tokens,
             tools=tools_payload,
-            tool_choice=req.tool_choice if tools_payload else "none",
+            tool_choice=req.tool_choice if tools_payload is not None else "none",
             response_format={"type": "json_object"}
             if req.response_format == "json"
             else None,
             stream=False,
         )
-        choice = resp.choices[0]
-        content = choice.message.content or ""
+
+        choice: Any = completion.choices[0]
+        message_text: str = choice.message.content or ""  # renamed from `content`
         tool_calls: Optional[List[ToolCall]] = None
-        if getattr(choice.message, "tool_calls", None):
+
+        tc_list: Any = getattr(choice.message, "tool_calls", None)
+        if tc_list:
             tool_calls = []
-            for tc in choice.message.tool_calls:
+            for tc in tc_list:
                 args = tc.function.arguments
                 if isinstance(args, str):
                     import json
 
                     try:
-                        parsed = json.loads(args)
+                        arguments = json.loads(args)
                     except Exception:
-                        parsed = {}
-                    arguments = parsed
+                        arguments = {}
                 else:
                     arguments = args
                 tool_calls.append(
                     ToolCall(id=tc.id, name=tc.function.name, arguments=arguments)
                 )
+            message_text = ""
 
         latency = int((time.time() - start) * 1000)
+        usage: Any = getattr(completion, "usage", None)
+
         return ChatResponse(
-            content="" if tool_calls else content,
+            content=message_text,
             tool_calls=tool_calls,
-            model=resp.model,
+            model=getattr(completion, "model", req.model or self._default_model),
             provider=self.name,
-            prompt_tokens=getattr(resp.usage, "prompt_tokens", None),
-            completion_tokens=getattr(resp.usage, "completion_tokens", None),
+            prompt_tokens=(usage.prompt_tokens if usage is not None else None),
+            completion_tokens=(usage.completion_tokens if usage is not None else None),
             latency_ms=latency,
         )
 
