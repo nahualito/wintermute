@@ -46,6 +46,20 @@ except Exception:
 
 @dataclass
 class GroqProvider(LLMProvider):
+    """Groq LLM Provider for Wintermute AI.
+
+    Example:
+        >>> from wintermute.ai import llms
+        >>> from wintermute.ai.providers.groq_provider import GroqProvider, register
+        >>> groq_prov = GroqProvider(api_key="your_groq_api_key")
+        >>> llms.register(groq_prov)
+
+    Note: Groq SDK must be installed separately with `pip install groq`.
+
+    Attributes:
+        api_key (Optional[str]): Groq API key for authentication.
+    """
+
     api_key: Optional[str] = None
     _name: str = "groq"
     _default_model: str = "llama-3.1-8b-instant"
@@ -55,6 +69,7 @@ class GroqProvider(LLMProvider):
         return self._name
 
     def list_models(self) -> list[ModelInfo]:
+        """List available Groq models."""
         return [
             ModelInfo("llama-3.1-8b-instant", "llama-3.1", 128_000, True, True, True),
             ModelInfo(
@@ -63,6 +78,13 @@ class GroqProvider(LLMProvider):
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
+        """Send a chat completion request to Groq LLM.
+
+        Args:
+            req (ChatRequest): The chat request containing messages and parameters.
+        Returns:
+            ChatResponse: The response from the Groq LLM.
+        """
         # Mock path (SDK not present)
         if not _HAS_GROQ:
             mock_text = "(mock groq) " + (
@@ -150,6 +172,7 @@ class GroqProvider(LLMProvider):
 
 
 def register(api_key: Optional[str] = None, *, as_name: str = "groq") -> None:
+    """Register the GroqProvider with Wintermute AI LLM registry."""
     prov = GroqProvider(api_key=api_key, _name=as_name)
     from ..provider import llms
 

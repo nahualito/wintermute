@@ -34,6 +34,7 @@ from .providers.openai_provider import register as register_openai
 
 
 def init_router() -> Router:
+    """Initialize and return a Router with registered LLM providers."""
     # Register all providers that you use
     register_bedrock(region=os.getenv("AWS_REGION", "us-east-1"))
     register_groq(api_key=os.getenv("GROQ_API_KEY"))

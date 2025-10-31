@@ -43,6 +43,8 @@ event_timestamp = (
 
 
 class TPM_register(Enum):
+    """TPM Registers"""
+
     TPM_ACCESS = 0x0000
     TPM_STS = 0x0001
     TPM_BURST_CNT = 0x0002
@@ -53,6 +55,8 @@ class TPM_register(Enum):
 
 @unique
 class TPMCommands(Enum):
+    """TPM 2.0 Command Codes"""
+
     TPMCommands_NV_UndefineSpaceSpecial = 0x0000011F
     TPMCommands_EvictControl = 0x00000120
     TPMCommands_HierarchyControl = 0x00000121
@@ -114,8 +118,10 @@ class TPMException(Exception):
 
 
 class TPMTransport:
-    """
-    Base class for communicating with TPM via /dev/tpm0 (or simulator)
+    """Base class for communicating with TPM via /dev/tpm0 (or simulator)
+
+    Attributes:
+        device_path (str): Path to the TPM device file.
     """
 
     def __init__(self, device_path: str = "/dev/tpm0"):
@@ -135,8 +141,10 @@ class TPMTransport:
 
 
 class TPMCommandBuilder:
-    """
-    Builds TPM command headers and payloads
+    """Builds TPM command headers and payloads
+
+    Attributes:
+        None
     """
 
     TPM_TAG_RQU_COMMAND = 0x8001
@@ -154,8 +162,10 @@ class TPMCommandBuilder:
 
 @with_default_category("tpm20")
 class tpm20(CommandSet):
-    """
-    Main interface for executing TPM commands
+    """Main interface for executing TPM commands
+
+    Attributes:
+        transport (TPMTransport): Transport layer for TPM communication.
     """
 
     def __init__(self, transport: TPMTransport = TPMTransport()):
@@ -163,11 +173,22 @@ class tpm20(CommandSet):
         super().__init__()
 
     def execute(self, command: TPMCommands, parameters: bytes = b"") -> bytes:
+        """Execute a TPM command with given parameters.
+
+        Arguments:
+            command (TPMCommands): The TPM command to execute.
+            parameters (bytes): The parameters for the command.
+        """
         command_buffer = TPMCommandBuilder.build_command(command, parameters)
         response = self.transport.send_command(command_buffer)
         return response
 
     def get_random(self, num_bytes: int) -> bytes:
+        """Get random bytes from the TPM.
+
+        Arguments:
+            num_bytes (int): Number of random bytes to retrieve.
+        """
         if not (1 <= num_bytes <= 64):
             raise ValueError("num_bytes must be between 1 and 64")
         param = struct.pack(">H", num_bytes)
@@ -179,6 +200,11 @@ class tpm20(CommandSet):
         raise NotImplementedError("Implement CreatePrimary with TPM structures.")
 
     def read_public(self, handle: int) -> bytes:
+        """Read the public area of an object in the TPM.
+
+        Arguments:
+            handle (int): The handle of the object to read.
+        """
         param = struct.pack(">I", handle)
         return self.execute(TPMCommands.TPMCommands_ReadPublic, param)
 
@@ -193,8 +219,7 @@ class tpm20(CommandSet):
 
     @with_argparser(tpm20_parser)
     def do_tpm20(self, args) -> None:  # type: ignore
-        """
-        Execute TPM commands.
+        """Execute TPM commands.
         Use -p to read public key, -r to get random bytes.
         """
         if args.public:

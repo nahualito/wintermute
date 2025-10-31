@@ -53,6 +53,30 @@ def _as_bedrock_messages(msgs: list[Message]) -> list[dict[str, object]]:
 
 @dataclass
 class BedrockProvider(LLMProvider):
+    """Amazon Bedrock LLM Provider for Wintermute AI.
+
+    Example:
+        >>> from wintermute.ai import llms
+        >>> from wintermute.ai.providers.bedrock_provider import (
+        ...     BedrockProvider,
+        ...     register,
+        ... )
+        >>> register(
+        ...     region="us-east-1",
+        ...     default_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        ... )
+        >>> bedrock = llms.get_provider("bedrock")
+        >>> req = bedrock.chat(
+        ...     ChatRequest(messages=[Message(role="user", content="Hello, Bedrock!")])
+        ... )
+        >>> print(req.content)
+
+    Attributes:
+        region (str): AWS region for Bedrock service. Default is "us-east-1".
+        default_model (str): Default Bedrock model ID to use. Change as per your account access.
+        _name (str): Internal name of the provider.
+    """
+
     region: str = "us-east-1"
     # Default Claude model; change per your account access
     default_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -63,12 +87,39 @@ class BedrockProvider(LLMProvider):
         return self._name
 
     def list_models(self) -> list[ModelInfo]:
+        """List available Bedrock models.
+        Note: Actual model listing via API is not supported; list models you have provisioned."""
         return [
             ModelInfo(self.default_model, "claude-3-5", 200_000, False, True, True),
             # Add additional Bedrock models you’ve provisioned here
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
+        """Send a chat request to Bedrock and receive a response.
+
+        Example:
+            >>> from wintermute.ai import llms
+            >>> from wintermute.ai.providers.bedrock_provider import (
+            ...     BedrockProvider,
+            ...     register,
+            ... )
+            >>> register(
+            ...     region="us-east-1",
+            ...     default_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            ... )
+            >>> bedrock = llms.get_provider("bedrock")
+            >>> req = bedrock.chat(
+            ...     ChatRequest(
+            ...         messages=[Message(role="user", content="Hello, Bedrock!")]
+            ...     )
+            ... )
+            >>> print(req.content)
+
+        Args:
+            req (ChatRequest): The chat request containing messages and parameters.
+
+        Returns:
+            ChatResponse: The response from the Bedrock model."""
         if boto3 is None:
             content = "(mock bedrock) " + (
                 req.messages[-1].content if req.messages else ""
@@ -133,6 +184,7 @@ def register(
     as_name: str = "bedrock",
     default_model: Optional[str] = None,
 ) -> None:
+    """Register the BedrockProvider with Wintermute AI LLM registry."""
     prov = BedrockProvider(region=region, _name=as_name)
     if default_model:
         object.__setattr__(prov, "default_model", default_model)

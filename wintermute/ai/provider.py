@@ -33,6 +33,8 @@ from .types import ChatRequest, ChatResponse
 
 @dataclass(frozen=True)
 class ModelInfo:
+    """Information about a language model."""
+
     name: str
     family: str
     context_window: int
@@ -43,6 +45,8 @@ class ModelInfo:
 
 
 class LLMProvider(Protocol):
+    """Protocol for LLM Providers."""
+
     @property
     def name(self) -> str: ...
     def list_models(self) -> list[ModelInfo]: ...
@@ -54,6 +58,8 @@ class LLMProvider(Protocol):
 
 
 class LLMRegistry:
+    """Registry for LLM Providers."""
+
     def __init__(self) -> None:
         self._providers: dict[str, LLMProvider] = {}
 
@@ -71,7 +77,20 @@ llms = LLMRegistry()
 
 
 class Router:
-    """Pluggable routing policy. Default: stick to default provider/model."""
+    """Pluggable routing policy. Default: stick to default provider/model.
+
+    Example:
+        >>> from wintermute.ai import llms
+        >>> from wintermute.ai.providers.router import Router
+        >>> router = Router(default_provider="openai", default_model="gpt-4.1-mini")
+        >>> req = ChatRequest(messages=[Message(role="user", content="Hello!")])
+        >>> provider, routed_req = router.choose(req)
+        >>> response = provider.chat(routed_req)
+
+    Args:
+        default_provider (str): Default provider name to use.
+        default_model (Optional[str]): Default model name to use.
+    """
 
     def __init__(
         self, default_provider: str, default_model: Optional[str] = None
@@ -80,6 +99,7 @@ class Router:
         self.default_model = default_model
 
     def choose(self, req: ChatRequest) -> tuple[LLMProvider, ChatRequest]:
+        """Choose the provider and possibly modify the request based on routing policy."""
         provider = llms.get(self.default_provider)
         model = req.model or self.default_model
         # Example heuristic: cheap tasks

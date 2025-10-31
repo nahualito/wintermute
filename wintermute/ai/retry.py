@@ -34,6 +34,7 @@ T = TypeVar("T")
 def with_retries(
     fn: Callable[[], T], *, attempts: int = 3, backoff_sec: float = 0.5
 ) -> T:
+    """Execute a function with retries and exponential backoff."""
     last_exc: Exception | None = None
     for i in range(attempts):
         try:

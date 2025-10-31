@@ -66,6 +66,15 @@ Console: Any = getattr(_depthcharge, "Console", None)
 # -----------------------------------------------------------------------------
 @runtime_checkable
 class PeripheralLike(Protocol):
+    """A minimal Protocol for Wintermute Peripheral-like objects.
+
+    Attributes:
+        device (str): Device connection string (e.g., COM port or /dev path).
+        workspace (str): Path to the workspace directory.
+        name (str): Name of the peripheral/device.
+        vulnerabilities (List[Any]): List to store found vulnerabilities.
+    """
+
     device: str
     workspace: str
     name: str
@@ -157,6 +166,14 @@ DANGER_RULES: List[Tuple[Pattern[str], int, str]] = [
 # -----------------------------------------------------------------------------
 @dataclass
 class DangerInfo:
+    """Information about the danger level of a command.
+
+    Attributes:
+        severity (int): Severity level of the command (0 = safe-ish, higher = riskier).
+        tags (List[str]): List of tags categorizing the danger.
+        reason (str): Short explanation of the danger assessment.
+    """
+
     severity: int = 0  # 0 = safe-ish, higher = riskier
     tags: List[str] = field(default_factory=list)  # e.g., ["mem-write", "flash"]
     reason: str = ""  # short explanation
@@ -170,6 +187,17 @@ class DangerInfo:
 
 @dataclass
 class CommandRecord:
+    """A record of a Depthcharge command with metadata.
+
+    Attributes:
+        name (str): Name of the command.
+        summary (str): Brief summary of the command.
+        usage (List[str]): List of usage lines for the command.
+        details (str): Detailed help text for the command.
+        categories (List[str]): Categories assigned to the command.
+        danger (DangerInfo): Danger assessment of the command.
+    """
+
     name: str
     summary: str
     usage: List[str]
@@ -241,6 +269,13 @@ def _extract_usage_lines(details: str) -> List[str]:
 
 
 def _categorize(name: str, summary: str, details: str) -> List[str]:
+    """Categorize a command based on its name, summary, and details.
+
+    Arguments:
+        name (str): Command name.
+        summary (str): Command summary.
+        details (str): Command detailed help text.
+    """
     key = f"{name} {summary} {details}".lower()
     cats = []
     for cat, tokens in CATEGORY_RULES:
@@ -252,6 +287,13 @@ def _categorize(name: str, summary: str, details: str) -> List[str]:
 
 
 def _assess_danger(name: str, summary: str, details: str) -> DangerInfo:
+    """Assess the danger level of a command based on its name, summary, and details.
+
+    Arguments:
+        name (str): Command name.
+        summary (str): Command summary.
+        details (str): Command detailed help text.
+    """
     blob = f"{name}\n{summary}\n{details}"
     score = 0
     tags: List[str] = []
@@ -277,8 +319,10 @@ def _assess_danger(name: str, summary: str, details: str) -> DangerInfo:
 
 
 def _parse_commands(commands_json: Dict[str, Dict[str, str]]) -> List[CommandRecord]:
-    """
-    Convert Depthcharge commands() JSON (like the one you pasted) to CommandRecord list.
+    """Convert Depthcharge commands() JSON (like the one you pasted) to CommandRecord list.
+
+    Arguments:
+        commands_json (Dict[str, Dict[str, str]]): JSON object from Depthcharge commands().
     """
     out: List[CommandRecord] = []
     for name, payload in commands_json.items():
@@ -306,6 +350,11 @@ def _parse_commands(commands_json: Dict[str, Dict[str, str]]) -> List[CommandRec
 
 
 def _severity_to_risk(sev: str) -> Dict[str, str]:
+    """Map a severity string to likelihood, impact, and severity levels.
+
+    Arguments:
+        sev (str): Severity string (e.g., "Critical", "High", "Medium", "Low").
+    """
     s = sev.lower()
     if s == "critical":
         return {"likelihood": "High", "impact": "Critical", "severity": "Critical"}
@@ -328,6 +377,7 @@ def _make_repro_step(
     arguments: Sequence[str],
     vulnOutput: Optional[str] = None,
 ) -> Any:
+    """Create a ReproductionStep object for a vulnerability."""
     from wintermute.findings import ReproductionStep  # runtime import
 
     return ReproductionStep(
@@ -353,6 +403,7 @@ def _make_user_vuln(
     verified: bool = False,
     reproduction_steps: Optional[List[Any]] = None,
 ) -> Any:
+    """Create a Vulnerability object for user-reported issues."""
     from wintermute.findings import Vulnerability  # runtime import
 
     v = Vulnerability(
@@ -373,6 +424,7 @@ def _make_user_vuln(
 
 
 def _sha256_file(p: Path) -> str:
+    """Compute SHA256 hash of a file."""
     h = hashlib.sha256()
     with p.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -386,10 +438,15 @@ def _sha256_file(p: Path) -> str:
 def _open_dc_context(
     device: str, timeout: float, arch: Optional[str], prompt: Optional[str] = "U-Boot> "
 ) -> ContextManager[Any]:
-    """
-    Prefer the official Depthcharge context handle. If the installed version
+    """Prefer the official Depthcharge context handle. If the installed version
     does not implement __enter__/__exit__, we wrap it. If Depthcharge is
     unavailable, fall back to Console.
+
+    Arguments:
+        device (str): Device connection string.
+        timeout (float): Timeout for operations.
+        arch (Optional[str]): Architecture string (e.g., "aarch64", "arm", "mips").
+        prompt (Optional[str]): Expected prompt string for the console.
     """
 
     if DepthchargeContext is not None:
@@ -459,6 +516,16 @@ def _open_dc_context(
 
 @dataclass
 class CommandInfo:
+    """Information about a Depthcharge command.
+
+    Attributes:
+        name (str): Name of the command.
+        brief (str): Brief summary of the command.
+        help (str): Detailed help text for the command.
+        dangerous (bool): Whether the command is considered dangerous.
+        categories (List[str]): Categories assigned to the command.
+    """
+
     name: str
     brief: str = ""
     help: str = ""
@@ -556,6 +623,11 @@ class DepthchargePeripheralAgent:
 
     # ---- Catalog commands + attach vuln -------------------------------------
     def catalog_commands_and_flag(self, addVulns: bool = True) -> Dict[str, Any]:
+        """Catalog U-Boot commands via Depthcharge and attach vulnerability if dangerous commands found.
+
+        Arguments:
+            addVulns (bool): Whether to attach vulnerabilities for dangerous commands.
+        """
         logger.debug(f"[Depthcharge] Cataloging commands ({self.device})")
 
         with _open_dc_context(self.device, self.timeout, self.arch) as dc:
@@ -653,6 +725,13 @@ class DepthchargePeripheralAgent:
         length: int,
         filename: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Dump memory via Depthcharge API and attach vulnerability if successful.
+
+        Arguments:
+            address (int): Start address to dump.
+            length (int): Number of bytes to dump.
+            filename (Optional[str]): Optional filename for the dump artifact.
+        """
         if filename is None:
             filename = f"memory_dump_{address:08X}_{length}.bin"
         out_path: Path = self.artifacts / filename

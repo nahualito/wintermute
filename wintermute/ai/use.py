@@ -33,6 +33,13 @@ from .types import ChatRequest, ChatResponse, Message, ToolSpec
 
 
 def simple_chat(router: Router, prompt: str, task_tag: str = "generic") -> str:
+    """Simple chat completion using the router.
+
+    Args:
+        router (Router): The router to select the LLM provider.
+        prompt (str): The user prompt for the chat.
+        task_tag (str): Optional task tag for routing. Default is "generic".
+    """
     req = ChatRequest(
         messages=[Message(role="user", content=prompt)], task_tag=task_tag
     )
@@ -50,6 +57,7 @@ def tool_calling_chat(
     response_format: Literal["text", "json"] = "text",
     task_tag: str = "generic",
 ) -> ChatResponse:
+    """Chat completion with tool calling support using the router."""
     req = ChatRequest(
         messages=messages,
         tools=tools,

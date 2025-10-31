@@ -35,7 +35,7 @@ dependencies = [
   "openai",
   "groq",
 ]
-description = "Hardware security hacking and auditing library for attack and pentesting automation."
+description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
 license = "MIT"
 name = "wintermute"

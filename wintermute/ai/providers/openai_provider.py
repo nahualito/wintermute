@@ -46,6 +46,19 @@ except Exception:
 
 @dataclass
 class OpenAIProvider(LLMProvider):
+    """OpenAI LLM Provider for Wintermute AI.
+
+    Example:
+        >>> from wintermute.ai import llms
+        >>> from wintermute.ai.providers.openai_provider import OpenAIProvider, register
+        >>> openai_prov = OpenAIProvider(api_key="your_openai_api_key")
+        >>> llms.register(openai_prov)
+
+    Note: OpenAI SDK must be installed separately with `pip install openai`.
+
+    Attributes:
+        api_key (Optional[str]): OpenAI API key for authentication."""
+
     api_key: Optional[str] = None
     _name: str = "openai"
     _default_model: str = "gpt-4.1-mini"
@@ -55,12 +68,20 @@ class OpenAIProvider(LLMProvider):
         return self._name
 
     def list_models(self) -> list[ModelInfo]:
+        """List available OpenAI models."""
         return [
             ModelInfo("gpt-4.1-mini", "gpt-4.1", 128_000, True, True, True),
             ModelInfo("o4-mini", "o4", 200_000, True, True, True),
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
+        """Send a chat completion request to OpenAI.
+
+        Args:
+            req (ChatRequest): The chat request containing messages and parameters.
+        Returns:
+            ChatResponse: The chat response from OpenAI.
+        """
         # Mock path (SDK not present)
         if not _HAS_OPENAI:
             mock_text = "(mock openai) " + (
@@ -154,6 +175,7 @@ class OpenAIProvider(LLMProvider):
 
 
 def register(api_key: Optional[str] = None, *, as_name: str = "openai") -> None:
+    """Register the OpenAIProvider with Wintermute AI LLM registry."""
     prov = OpenAIProvider(api_key=api_key, _name=as_name)
     from ..provider import llms
 

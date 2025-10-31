@@ -35,6 +35,15 @@ Role = Literal["system", "user", "assistant", "tool"]
 
 @dataclass(frozen=True)
 class Message:
+    """A message in a chat conversation.
+
+    Attributes:
+        role (Role): The role of the message sender.
+        content (str): The content of the message.
+        tool_name (Optional[str]): Name of the tool if role is "tool".
+        tool_call_id (Optional[str]): ID of the tool call if role is "tool".
+    """
+
     role: Role
     content: str
     tool_name: Optional[str] = None
@@ -43,6 +52,15 @@ class Message:
 
 @dataclass(frozen=True)
 class ToolSpec:
+    """Specification for a tool that can be called by the LLM.
+
+    Attributes:
+        name (str): Name of the tool.
+        description (str): Description of the tool's purpose.
+        input_schema (JSONObject): JSON schema defining the tool's input.
+        output_schema (Optional[JSONObject]): Optional JSON schema for the tool's output.
+    """
+
     name: str
     description: str
     input_schema: JSONObject
@@ -52,6 +70,14 @@ class ToolSpec:
 
 @dataclass(frozen=True)
 class ToolCall:
+    """A tool call made by the LLM during chat completion.
+
+    Attributes:
+        id (str): Unique identifier for the tool call.
+        name (str): Name of the tool being called.
+        arguments (JSONObject): The arguments passed to the tool as a JSON object.
+    """
+
     id: str
     name: str
     arguments: JSONObject  # parsed JSON args
@@ -59,6 +85,20 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class ChatRequest:
+    """A request for chat completion.
+
+    Attributes:
+        messages (list[Message]): The list of messages in the conversation.
+        model (Optional[str]): The model to use for completion.
+        temperature (float): Sampling temperature for response generation.
+        max_tokens (Optional[int]): Maximum tokens to generate in the response.
+        tools (Optional[Sequence[ToolSpec]]): Tools available for the LLM to call.
+        tool_choice (Literal["auto", "none", "required"]): Tool calling behavior.
+        response_format (Literal["text", "json"]): Desired response format.
+        stream (bool): Whether to stream the response.
+        task_tag (Optional[str]): Optional tag for tracking the request.
+    """
+
     messages: list[Message]
     model: Optional[str] = None
     temperature: float = 0.2
@@ -72,6 +112,18 @@ class ChatRequest:
 
 @dataclass(frozen=True)
 class ChatResponse:
+    """A response from a chat completion.
+
+    Attributes:
+        content (str): The content of the response.
+        tool_calls (Optional[list[ToolCall]]): List of tool calls made by the LLM.
+        model (Optional[str]): The model used for the response.
+        provider (Optional[str]): The provider of the model.
+        prompt_tokens (Optional[int]): Number of tokens in the prompt.
+        completion_tokens (Optional[int]): Number of tokens in the completion.
+        latency_ms (Optional[int]): Latency of the request in milliseconds.
+    """
+
     content: str
     tool_calls: Optional[list[ToolCall]] = None
     model: Optional[str] = None
