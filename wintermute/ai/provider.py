@@ -110,3 +110,11 @@ class Router:
                     break
         new_req = ChatRequest(**{**req.__dict__, "model": model})
         return provider, new_req
+
+    def set_default(
+        self, *, provider: Optional[str] = None, model: Optional[str] = None
+    ) -> None:
+        if provider is not None:
+            self.default_provider = provider
+        if model is not None:
+            self.default_model = model

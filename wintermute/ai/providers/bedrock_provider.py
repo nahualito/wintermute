@@ -23,62 +23,62 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# wintermute/ai/providers/bedrock_provider.py
+# wintermute/ai/providers/bedrock_provider.py
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Any, Iterable, Literal, Optional
+
+import boto3
 
 from ..provider import LLMProvider, ModelInfo
 from ..types import ChatRequest, ChatResponse, Message
 
-# Bedrock SDK (boto3). Keep import optional for strict mypy.
-try:
-    import boto3
-except Exception as e:
-    raise ImportError(
-        "BedrockProvider requires boto3. Install with `pip install boto3` "
-        "and ensure AWS credentials are configured."
-    ) from e
-
 
 def _as_bedrock_messages(msgs: list[Message]) -> list[dict[str, object]]:
-    # Claude Messages API format via Bedrock
+    # Claude Messages API via Bedrock: roles are "user" or "assistant".
     out: list[dict[str, object]] = []
     for m in msgs:
-        role = "user" if m.role in ("system", "user") else "assistant"
+        role = "assistant" if m.role == "assistant" else "user"  # map system->user
         out.append({"role": role, "content": [{"type": "text", "text": m.content}]})
     return out
 
 
+_ModelFamily = Literal["anthropic", "deepseek", "llama", "other"]
+
+
+def _detect_family(model_id: str) -> _ModelFamily:
+    mid = model_id.lower()
+    if "anthropic" in mid or "claude" in mid:
+        return "anthropic"
+    if mid.startswith("us.deepseek.") or "deepseek" in mid:
+        return "deepseek"
+    if "llama" in mid or "meta.llama" in mid or "llama3" in mid:
+        return "llama"
+    return "other"
+
+
 @dataclass
 class BedrockProvider(LLMProvider):
-    """Amazon Bedrock LLM Provider for Wintermute AI.
+    """Amazon Bedrock LLM Provider.
+
+    Example Bedrock models include Anthropic Claude, DeepSeek-R1, and Meta Llama.
 
     Example:
-        >>> from wintermute.ai import llms
-        >>> from wintermute.ai.providers.bedrock_provider import (
-        ...     BedrockProvider,
-        ...     register,
-        ... )
-        >>> register(
-        ...     region="us-east-1",
-        ...     default_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-        ... )
-        >>> bedrock = llms.get_provider("bedrock")
-        >>> req = bedrock.chat(
-        ...     ChatRequest(messages=[Message(role="user", content="Hello, Bedrock!")])
-        ... )
-        >>> print(req.content)
+        >>> from wintermute.ai.providers.bedrock_provider import BedrockProvider
+        >>> bedrock = BedrockProvider(region="us-east-1")
+        >>> response = bedrock.chat(ChatRequest(...))
 
     Attributes:
-        region (str): AWS region for Bedrock service. Default is "us-east-1".
-        default_model (str): Default Bedrock model ID to use. Change as per your account access.
-        _name (str): Internal name of the provider.
+        region (str): AWS region where Bedrock is available.
+        default_model (str): Default model ID to use if none specified.
     """
 
     region: str = "us-east-1"
-    # Default Claude model; change per your account access
+    # Make sure this is enabled for your account/region
     default_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     _name: str = "bedrock"
 
@@ -87,91 +87,154 @@ class BedrockProvider(LLMProvider):
         return self._name
 
     def list_models(self) -> list[ModelInfo]:
-        """List available Bedrock models.
-        Note: Actual model listing via API is not supported; list models you have provisioned."""
+        # Include one Anthropic (Claude), one DeepSeek (inference profile), one Llama
         return [
-            ModelInfo(self.default_model, "claude-3-5", 200_000, False, True, True),
-            # Add additional Bedrock models you’ve provisioned here
+            ModelInfo(
+                name="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                family="claude-3-5",
+                context_window=200_000,
+                supports_tools=False,
+                supports_json=True,
+                supports_stream=True,
+            ),
+            # DeepSeek is invoked via an **inference profile** (note the 'us.' prefix)
+            ModelInfo(
+                name="us.deepseek.r1-v1:0",
+                family="deepseek-r1",
+                context_window=200_000,
+                supports_tools=False,
+                supports_json=True,
+                supports_stream=True,
+            ),
+            # Example Llama model ID (ensure access in your region)
+            ModelInfo(
+                name="meta.llama3-8b-instruct-v1:0",
+                family="llama3",
+                context_window=128_000,
+                supports_tools=False,
+                supports_json=True,
+                supports_stream=True,
+            ),
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
-        """Send a chat request to Bedrock and receive a response.
-
-        Example:
-            >>> from wintermute.ai import llms
-            >>> from wintermute.ai.providers.bedrock_provider import (
-            ...     BedrockProvider,
-            ...     register,
-            ... )
-            >>> register(
-            ...     region="us-east-1",
-            ...     default_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            ... )
-            >>> bedrock = llms.get_provider("bedrock")
-            >>> req = bedrock.chat(
-            ...     ChatRequest(
-            ...         messages=[Message(role="user", content="Hello, Bedrock!")]
-            ...     )
-            ... )
-            >>> print(req.content)
-
-        Args:
-            req (ChatRequest): The chat request containing messages and parameters.
-
-        Returns:
-            ChatResponse: The response from the Bedrock model."""
-        if boto3 is None:
-            content = "(mock bedrock) " + (
-                req.messages[-1].content if req.messages else ""
-            )
-            return ChatResponse(
-                content=content,
-                model=req.model or self.default_model,
-                provider=self.name,
-            )
-
-        client = boto3.client("bedrock-runtime", region_name=self.region)
+        client: Any = boto3.client("bedrock-runtime", region_name=self.region)
         model_id = req.model or self.default_model
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "messages": _as_bedrock_messages(req.messages),
-            "temperature": req.temperature,
-            "max_tokens": req.max_tokens or 1024,
-        }
-        start = time.time()
-        resp = client.invoke_model(
-            modelId=model_id,
-            body=bytes(str(body), "utf-8"),
-            contentType="application/json",
-            accept="application/json",
-        )
-        # Minimal parse: boto3 returns StreamingBody; we read it and eval json safely
-        payload = resp["body"].read().decode("utf-8")
-        # To avoid runtime deps here, rely on stdlib json
-        import json
+        family = _detect_family(model_id)
 
-        j = json.loads(payload)
-        # Claude Messages returns list of content blocks
-        parts = j.get("content", [])
+        # ----- Build body per model family (keys must match AWS docs) -----
+        if family == "anthropic":
+            # Claude via Messages API
+            body_obj: dict[str, Any] = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "messages": _as_bedrock_messages(req.messages),
+                "temperature": float(req.temperature),
+                "max_tokens": req.max_tokens if req.max_tokens is not None else 1024,
+            }
+        elif family == "deepseek":
+            # DeepSeek-R1: text completion schema
+            # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
+            prompt = req.messages[-1].content if req.messages else ""
+            body_obj = {
+                "prompt": prompt,
+                "temperature": float(req.temperature),
+                "top_p": 0.9,
+                "max_tokens": req.max_tokens if req.max_tokens is not None else 1024,
+                # "stop": []  # optional list of strings
+            }
+        elif family == "llama":
+            # Meta Llama Instruct: prompt + max_gen_len (NO max_tokens)
+            # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-meta.html
+            user_text = req.messages[-1].content if req.messages else ""
+            # Llama works best when wrapped in its header format; not strictly required but recommended.
+            prompt = (
+                "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n"
+                f"{user_text}\n"
+                "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
+            )
+            body_obj = {
+                "prompt": prompt,
+                "temperature": float(req.temperature),
+                "top_p": 0.9,
+                "max_gen_len": req.max_tokens if req.max_tokens is not None else 512,
+            }
+        else:
+            # Generic fallback: simple prompt-only schema that many providers accept
+            prompt = req.messages[-1].content if req.messages else ""
+            body_obj = {
+                "prompt": prompt,
+                "temperature": float(req.temperature),
+                "top_p": 0.9,
+                "max_tokens": req.max_tokens if req.max_tokens is not None else 512,
+            }
+
+        body_bytes = json.dumps(body_obj).encode("utf-8")
+
+        # ----- Invoke -----
+        start = time.time()
+        try:
+            resp = client.invoke_model(
+                modelId=model_id,
+                body=body_bytes,
+                contentType="application/json",
+                accept="application/json",
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Bedrock invoke_model failed: {e}\nRequest body: {json.dumps(body_obj)}"
+            ) from e
+
+        payload = resp["body"].read().decode("utf-8")
+        j: Any = json.loads(payload)
+
+        # ----- Parse response by family -----
         text = ""
-        if parts and isinstance(parts, list):
-            first = parts[0]
-            if isinstance(first, dict):
-                text = str(first.get("text", ""))
+        usage: dict[Any, Any] = {}
+        if family == "anthropic":
+            # Claude Messages: { "content": [ {"text": "..."} ], "usage": {...} }
+            parts = j.get("content") or []
+            if isinstance(parts, list) and parts and isinstance(parts[0], dict):
+                text = str(parts[0].get("text", ""))
+            usage = j.get("usage", {}) if isinstance(j.get("usage", {}), dict) else {}
+        elif family == "deepseek":
+            # DeepSeek: { "choices": [ { "text": "...", "stop_reason": "..." } ] }
+            choices = j.get("choices") or []
+            if isinstance(choices, list) and choices:
+                text = str(choices[0].get("text", ""))
+            # usage may be absent
+        elif family == "llama":
+            # Llama 3/3.1/3.2/4 Instruct can return various shapes; primary is "generation"
+            if "generation" in j:
+                text = str(j.get("generation", ""))
+            elif "outputs" in j and isinstance(j["outputs"], list) and j["outputs"]:
+                text = str(j["outputs"][0].get("text", ""))
+            elif "choices" in j and isinstance(j["choices"], list) and j["choices"]:
+                text = str(j["choices"][0].get("text", ""))
+            elif "text" in j:
+                text = str(j.get("text", ""))
+            # usage fields differ; omit unless clearly present
+        else:
+            # Fallbacks seen in the wild
+            text = str(j.get("outputText", j.get("generation", j.get("text", ""))))
+
         latency = int((time.time() - start) * 1000)
+
         return ChatResponse(
             content=text,
             model=model_id,
             provider=self.name,
-            prompt_tokens=j.get("usage", {}).get("input_tokens"),
-            completion_tokens=j.get("usage", {}).get("output_tokens"),
+            prompt_tokens=usage.get("input_tokens")
+            if isinstance(usage, dict)
+            else None,
+            completion_tokens=usage.get("output_tokens")
+            if isinstance(usage, dict)
+            else None,
             latency_ms=latency,
         )
 
     def embed(
         self, texts: Iterable[str], model: Optional[str] = None
     ) -> list[list[float]]:
-        # Stub: replace with Titan Embeddings or similar on Bedrock
         return [[0.0] * 1024 for _ in texts]
 
     def count_tokens(self, text: str, model: Optional[str] = None) -> int:
@@ -184,10 +247,9 @@ def register(
     as_name: str = "bedrock",
     default_model: Optional[str] = None,
 ) -> None:
-    """Register the BedrockProvider with Wintermute AI LLM registry."""
     prov = BedrockProvider(region=region, _name=as_name)
     if default_model:
-        object.__setattr__(prov, "default_model", default_model)
+        prov.default_model = default_model
     from ..provider import llms
 
     llms.register(prov)
