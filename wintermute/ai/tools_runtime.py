@@ -24,11 +24,13 @@
 # SOFTWARE.
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Callable, Dict
-import json
+
 from ..ai.json_types import JSONObject
 from ..ai.types import ToolSpec
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -36,6 +38,7 @@ class Tool:
     input_schema: JSONObject
     output_schema: JSONObject
     handler: Callable[[JSONObject], JSONObject]
+
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -49,7 +52,9 @@ class ToolRegistry:
         # You can validate args/result against JSON Schema here if you want.
         return tool.handler(args)
 
+
 tools = ToolRegistry()
+
 
 def spec_from_tool(tool: Tool, description: str) -> ToolSpec:
     return ToolSpec(

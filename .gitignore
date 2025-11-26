@@ -194,6 +194,9 @@ pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,python,virtualenv,visualstudiocode
 
-### onoSendai ###
+### Winermute ###
 # json
 Wintermute.json
+
+# No artifact files on git repo
+artifacts/*
