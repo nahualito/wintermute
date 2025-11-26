@@ -200,3 +200,6 @@ Wintermute.json
 
 # No artifact files on git repo
 artifacts/*
+
+# No jupyter notebooks on git repo
+*.ipynb
