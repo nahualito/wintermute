@@ -97,6 +97,7 @@ class Service(BaseModel):
 
     def __init__(
         self,
+        name: str = "",
         protocol: str = "ipv4",
         app: str = "",
         portNumber: int = 0,
@@ -104,6 +105,7 @@ class Service(BaseModel):
         transport_layer: str = "",
         vulnerabilities: list[Vulnerability] | list[dict[str, Any]] | None = None,
     ) -> None:
+        self.name = name
         self.protocol = protocol
         self.app = app
         self.portNumber = portNumber
