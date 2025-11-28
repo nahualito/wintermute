@@ -68,9 +68,14 @@ def make_full_operation(tmp_path: Path) -> core.Operation:
     )
 
     # AWS Account with user + vulnerability
-    assert op.addAWSAccount("111122223333", "Prod", "Production account")
+    assert op.addAWSAccount(
+        name="aws-prod",
+        account_id="123456789012",
+        arn="arn:aws:iam::123456789012:root",
+        default_region="us-east-1",
+    )
     aws = op.awsaccounts[0]
-    aws.addUser("ajones", "Alice Jones", "alicej@example.com", ["Blue"])
+    aws.addUser("ajones", "arn:aws:iam::123456789012:user/ajones", ["Admin"])
     aws.addVulnerability(
         title="S3 Public Bucket",
         description="World readable bucket",
@@ -153,7 +158,7 @@ def test_operation_save_and_load(tmp_path: Path, monkeypatch: Any) -> None:
 
     # AWS Account -> User + Vulnerability survived
     aws2 = op2.awsaccounts[0]
-    assert aws2.users[0].uid == "ajones"
+    assert aws2.users[0].username == "ajones"
     assert aws2.vulnerabilities[0].risk.severity == "Critical"
 
 
@@ -162,7 +167,7 @@ def test_pentest_inherits_and_round_trip(tmp_path: Path, monkeypatch: Any) -> No
 
     pt = core.Pentest(name="PT1")
     pt.addAnalyst("Pentest Person", "pentester", "pentest@example.com")
-    pt.addAWSAccount("444455556666", "TestAccount")
+    pt.addAWSAccount("TestAccount", "Test Account", account_id="444455556666")
     pt.save()
 
     f = tmp_path / "PT1.json"
@@ -172,4 +177,4 @@ def test_pentest_inherits_and_round_trip(tmp_path: Path, monkeypatch: Any) -> No
     pt2.load()
 
     assert pt2.analysts[0].userid == "pentester"
-    assert pt2.awsaccounts[0].accountId == "444455556666"
+    assert pt2.awsaccounts[0].account_id == "444455556666"

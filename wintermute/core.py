@@ -36,8 +36,9 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from tinydb import TinyDB
 
@@ -317,6 +318,27 @@ class User(BaseModel):
         return False
 
 
+# AWS Specific Classes
+@dataclass
+class AWSUser(BaseModel):
+    username: str
+    arn: str | None = None
+    attached_policies: List[str] = field(default_factory=list)
+
+    __schema__ = {}
+    __enums__ = {}
+
+
+@dataclass
+class AWSService(BaseModel):
+    name: str
+    resources: List[str] = field(default_factory=list)
+    config: Dict[str, Any] = field(default_factory=dict)
+
+    __schema__ = {}
+    __enums__ = {}
+
+
 class AWSAccount(CloudAccount):
     """This class represents an AWS Account that may contain users and vulnerabilities.
 
@@ -326,70 +348,96 @@ class AWSAccount(CloudAccount):
 
     Examples:
         >>> import core
-        >>> r = core.AWSAccount(
-        ...     "111122223333", "Prod Account", "This is the prod account"
+        >>> acct = AWSAccount(
+        ...     name="aws-prod",
+        ...     description="This is the prod account",
+        ...     account_id="123456789012",
+        ...     arn="arn:aws:iam::123456789012:root",
+        ...     default_region="us-east-1",
+        ...     users=[
+        ...         {"username": "alice"},
+        ...         {"username": "bob", "attached_policies": ["Admin"]},
+        ...     ],
+        ...     services=[{"name": "s3", "resources": ["bucket1", "bucket2"]}],
+        ...     vulnerabilities=[
+        ...         Vulnerability(
+        ...             title="Public S3",
+        ...             description="Bucket allows public read",
+        ...             risk=Risk(severity="High"),
+        ...         ),
+        ...     ],
         ... )
-        >>> r.accountId
-        '111122223333'
+        >>> r.account_id
+        '123456789012'
         >>> r.name
-        'Prod Account'
+        'aws-prod'
         >>> r.description
         'This is the prod account'
 
     Attributes:
-        * accountId (str): AWS Account ID
-        * name (str): Name of the AWS Account
-        * description (str): Description of the AWS Account
-        * vulnerabilities (array): Array of Vulnerability objects associated with the AWS Account
-        * users (array): Array of User objects associated with the AWS Account
+        * account_id (str): AWS Account ID
+        * arn (str): AWS Account ARN
+        * partition (str): AWS partition (aws, aws-us-gov, aws-cn)
+        * default_region (str): Default AWS region for the account
+        * tags (dict): Dictionary of tags associated with the account
+        * users (list): List of AWSUser objects associated with the account
+        * services (list): List of AWSService objects associated with the account
     """
 
     __schema__ = {
-        "vulnerabilities": Vulnerability,
-        "users": User,
+        "users": AWSUser,
+        "services": AWSService,
     }
 
     def __init__(
         self,
-        accountId: str,
         name: str,
         description: str = "",
-        vulnerabilities: list[Vulnerability] | None = None,
-        users: list[User] | None = None,
-    ):
-        self.accountId = accountId
-        self.name = name
-        self.description = description
+        *,
+        account_id: str | None = None,
+        arn: str | None = None,
+        partition: str = "aws",  # aws, aws-us-gov, aws-cn
+        default_region: str | None = None,
+        tags: Dict[str, str] | None = None,
+        users: Optional[List[AWSUser | Dict[str, Any]]] = None,
+        services: Optional[List[AWSService | Dict[str, Any]]] = None,
+        vulnerabilities: Optional[List[Any]] = None,
+    ) -> None:
+        # let CloudAccount handle name/description/vulnerabilities coercion
+        super().__init__(
+            name=name, description=description, vulnerabilities=vulnerabilities
+        )
 
-        # Rehydrate vulnerabilities
-        self.vulnerabilities: list[Vulnerability] = []
-        if vulnerabilities:
-            for v in vulnerabilities:
-                if isinstance(v, dict):
-                    self.vulnerabilities.append(Vulnerability.from_dict(v))
-                    log.debug(
-                        f"Rehydrated vulnerability {v.get('title', 'unknown')} for AWSAccount {self.accountId}"
-                    )
-                elif isinstance(v, Vulnerability):
-                    self.vulnerabilities.append(v)
-                    log.debug(
-                        f"Added existing vulnerability {v.title} for AWSAccount {self.accountId}"
-                    )
+        self.account_id = account_id
+        self.arn = arn
+        self.partition = partition
+        self.default_region = default_region
+        self.tags = dict(tags) if tags else {}
 
-        # Rehydrate users
-        self.users: list[User] = []
+        self.users: List[AWSUser] = []
         if users:
             for u in users:
-                if isinstance(u, dict):
-                    self.users.append(User.from_dict(u))
-                    log.debug(
-                        f"Rehydrated user {u.get('uid', 'unknown')} for AWSAccount {self.accountId}"
-                    )
-                elif isinstance(u, User):
+                if isinstance(u, AWSUser):
                     self.users.append(u)
-                    log.debug(
-                        f"Added existing user {u.uid} for AWSAccount {self.accountId}"
-                    )
+                elif isinstance(u, dict):
+                    self.users.append(AWSUser.from_dict(u))
+                else:
+                    raise TypeError(f"Unexpected type in users: {type(u)}")
+
+        self.services: List[AWSService] = []
+        if services:
+            for s in services:
+                if isinstance(s, AWSService):
+                    self.services.append(s)
+                elif isinstance(s, dict):
+                    self.services.append(AWSService.from_dict(s))
+                else:
+                    raise TypeError(f"Unexpected type in services: {type(s)}")
+
+    # Optional: convenience
+    @property
+    def provider(self) -> str:
+        return "aws"
 
     def addVulnerability(
         self,
@@ -424,22 +472,14 @@ class AWSAccount(CloudAccount):
 
     def addUser(
         self,
-        uid: str,
-        name: str,
-        email: str,
-        teams: list[str],
-        dept: str = "",
-        permissions: list[str] | None = None,
-        override_reason: str = "",
+        username: str,
+        arn: str | None = None,
+        attached_policies: List[str] = field(default_factory=list),
     ) -> bool:
-        u = User(
-            uid=uid,
-            name=name,
-            email=email,
-            teams=teams,
-            dept=dept,
-            permissions=permissions or [],
-            override_reason=override_reason,
+        u = AWSUser(
+            username=username,
+            arn=arn,
+            attached_policies=attached_policies,
         )
         if u not in self.users:
             self.users.append(u)
@@ -669,9 +709,33 @@ class Operation(BaseModel):
                 return True
         return False
 
-    def addAWSAccount(self, accountId: str, name: str, description: str = "") -> bool:
+    def addAWSAccount(
+        self,
+        name: str,
+        description: str = "",
+        *,
+        account_id: str | None = None,
+        arn: str | None = None,
+        partition: str = "aws",  # aws, aws-us-gov, aws-cn
+        default_region: str | None = None,
+        tags: Dict[str, str] | None = None,
+        users: Optional[List[AWSUser | Dict[str, Any]]] = None,
+        services: Optional[List[AWSService | Dict[str, Any]]] = None,
+        vulnerabilities: Optional[List[Any]] = None,
+    ) -> bool:
         """Add an AWS Account to the operation"""
-        a = AWSAccount(accountId, name, description)
+        a = AWSAccount(
+            name=name,
+            description=description,
+            account_id=account_id,
+            arn=arn,
+            partition=partition,
+            default_region=default_region,
+            tags=tags,
+            users=users,
+            services=services,
+            vulnerabilities=vulnerabilities,
+        )
         if a not in self.awsaccounts:
             self.awsaccounts.append(a)
             return True
@@ -680,7 +744,7 @@ class Operation(BaseModel):
     def delAWSAccount(self, accountId: str) -> bool:
         """Delete an AWS Account from the operation by accountId"""
         for a in self.awsaccounts:
-            if a.accountId == accountId:
+            if a.account_id == accountId:
                 self.awsaccounts.remove(a)
                 return True
         return False
