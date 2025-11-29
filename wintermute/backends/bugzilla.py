@@ -25,286 +25,447 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, MutableMapping, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
-import requests  # pip install types-requests for stubs
+import requests
 
-from ..tickets import Comment, Status, TicketData
+if TYPE_CHECKING:
+    # type-only to avoid circular imports at runtime
+    from wintermute.tickets import Comment, TicketData
 
 
-def _parse_bugzilla_time(s: Optional[str]) -> datetime:
-    """Parse Bugzilla time string into a datetime object.
-    Bugzilla times are in ISO 8601 format, e.g., "2024-06-10T14:23:45Z".
-    If the string is None or empty, returns the current UTC time.
+# --------- helpers: URL + auth ---------
+
+
+def _extract_bug_id(js: Any) -> Optional[str]:
     """
-    if not s:
-        return datetime.now(timezone.utc)
-    s2 = s[:-1] + "+00:00" if s.endswith("Z") else s
-    try:
-        return datetime.fromisoformat(s2)
-    except Exception:
-        # last resort: strip fractional seconds if present
-        core = s2.split(".")[0]
-        return datetime.fromisoformat(core)
+    Try to extract a bug id from various Bugzilla create responses.
+    Compatible with:
+      - {"id": 123}
+      - {"bug_id": 123}
+      - {"bug": {"id": 123, ...}}
+      - {"bugs": [{"id": 123, ...}, ...]}
+      - {"bugs": {"123": {...}}}
+    Returns None if nothing suitable is found.
+    """
+    if not isinstance(js, dict):
+        return None
+
+    # Simple cases
+    if "id" in js:
+        return str(js["id"])
+    if "bug_id" in js:
+        return str(js["bug_id"])
+
+    # {"bug": {...}}
+    bug = js.get("bug")
+    if isinstance(bug, dict):
+        if "id" in bug:
+            return str(bug["id"])
+        if "bug_id" in bug:
+            return str(bug["bug_id"])
+
+    # {"bugs": [...]}
+    bugs = js.get("bugs")
+    if isinstance(bugs, list) and bugs:
+        first = bugs[0]
+        if isinstance(first, dict):
+            if "id" in first:
+                return str(first["id"])
+            if "bug_id" in first:
+                return str(first["bug_id"])
+
+    # {"bugs": {"123": {...}}}
+    if isinstance(bugs, dict) and bugs:
+        # take first key
+        key = next(iter(bugs.keys()))
+        return str(key)
+
+    return None
+
+
+def _unpack_ticket_like(obj: Any) -> Dict[str, Any]:
+    """
+    Accepts:
+      - dict(...)        -> returned as-is
+      - TicketData(...)  -> obj.to_dict()
+      - Ticket(...)      -> obj.data.to_dict()
+      - any object with attributes: title, description, assignee, requester, status, custom_fields
+    Returns a dict with at least those keys if present.
+    """
+    if isinstance(obj, dict):
+        data = dict(obj)
+    else:
+        # If it's a Ticket wrapper, drop to its 'data'
+        candidate = getattr(obj, "data", obj)
+        if hasattr(candidate, "to_dict"):
+            data = candidate.to_dict()
+        else:
+            # Build from attrs
+            keys = (
+                "title",
+                "description",
+                "assignee",
+                "requester",
+                "status",
+                "custom_fields",
+            )
+            data = {k: getattr(candidate, k) for k in keys if hasattr(candidate, k)}
+    # ensure custom_fields is a dict if present/needed
+    if not isinstance(data.get("custom_fields"), dict):
+        # normalize None or missing to {}
+        data["custom_fields"] = (
+            {} if data.get("custom_fields") is None else data.get("custom_fields", {})
+        )
+    return data
+
+
+def _status_name(value: Any) -> str:
+    """Return a lower-case status name from string or Enum; empty string if unknown."""
+    if isinstance(value, Enum):
+        return value.name.lower()
+    if isinstance(value, str):
+        return value.lower()
+    return ""
+
+
+def _normalize_rest_base(base_url: str) -> str:
+    b = base_url.rstrip("/") + "/"
+    if b.endswith("/rest/"):
+        return b
+    # user may have given ".../bugzilla" or ".../bugzilla/"
+    if b.endswith("/bugzilla/"):
+        return b + "rest/"
+    # already ".../rest" (no slash)
+    if b.endswith("/rest/") is False and b.endswith("/rest"):
+        return b + "/"
+    # fallback: assume it's the root and append rest/
+    return b + "rest/"
+
+
+def _status_to_ticket(status: str) -> str:
+    # Bugzilla common statuses → Ticket.Status names (lower-case strings)
+    s = status.upper()
+    if s in {"NEW", "UNCONFIRMED", "CONFIRMED"}:
+        return "open"
+    if s in {"IN_PROGRESS", "ASSIGNED"}:
+        return "in_progress"
+    if s in {"RESOLVED"}:
+        return "resolved"
+    if s in {"VERIFIED"}:
+        return "resolved"  # or a custom "verified" if you have it
+    if s in {"CLOSED"}:
+        return "closed"
+    return "open"
+
+
+def _status_from_ticket(status_name: str) -> str:
+    # Ticket.Status (enum name/lowercase) → Bugzilla status string
+    s = status_name.lower()
+    if s in {"open", "new"}:
+        return "NEW"
+    if s in {"in_progress", "assigned"}:
+        return "ASSIGNED"
+    if s in {"resolved", "done"}:
+        return "RESOLVED"
+    if s in {"closed"}:
+        return "CLOSED"
+    return "NEW"
 
 
 @dataclass
 class BugzillaBackend:
-    """Bugzilla backend for Wintermute ticketing system.
-    Uses the Bugzilla REST API.
+    """
+    Minimal Bugzilla backend that satisfies the Ticket backend protocol.
 
-    Example usage:
-        >>> backend = BugzillaBackend(
-                base_url="https://bugzilla.example.com",
-                api_key="your_api_key_here",
-                default_product="MyProduct",
-                default_component="MyComponent",
-            )
-        >>> Ticket.register_backend("bugzilla", bz, make_default=True)
-        >>> tid = Ticket.create(
-                title="Sign-in fails on Safari",
-                description="Repro: ...",
-                assignee="alice@example.com",
-                requester="qa@example.com",
-            )
-        >>> ticket = Ticket.read(tid)
-        >>> print(ticket)
-        >>> ticket.update(status=Status.IN_PROGRESS)
+    Example:
+    >>> from wintermute.backends.bugzilla import BugzillaBackend
+    >>> from wintermute.tickets import Ticket
+    >>>
+    >>> backend = BugzillaBackend(
+    ...     base_url="http://192.168.0.145/bugzilla",  # or ".../bugzilla/rest"
+    ...     api_key="YOUR_API_KEY_HERE",
+    ...     default_product="MyProduct",
+    ...     default_component="Backend",
+    ... )
+    >>>
+    >>> Ticket.register_backend("bugzilla", backend, make_default=True)
+    >>> tid = Ticket.create(
+    ...     title="Sign-in fails on Safari",
+    ...     description="Repro: ...",
+    ...     assignee="nahualito@localhost.dev",
+    ...     requester="root@localhost.dev",
+    ...     # optional: override product/component at creation-time:
+    ...     custom_fields={
+    ...         "product": "TestProduct",
+    ...         "component": "TestComponent",
+    ...         "op_sys": "Windows",
+    ...         "rep_platform": "All",
+    ...         "version": "unspecified",
+    ...     },
+    ... )
+    >>> t = Ticket.read(tid)
+    >>> Ticket.comment(
+    ...     tid, text="Added HAR and screen recording", author="nahualito@localhost.dev"
+    ... )
+    >>> Ticket.update(tid, status="resolved")
 
-
-    Attributes:
-        base_url: Base URL of the Bugzilla instance (e.g., "https://bugzilla.example.com"). No trailing slash.
-        api_key: API key for authentication.
-        default_product: Default product name for ticket creation.
-        default_component: Default component name for ticket creation.
-        default_version: Default version name for ticket creation. Defaults to "unspecified".
-        timeout: Timeout for HTTP requests in seconds. Defaults to 30.
-        status_out_map: Mapping from Wintermute Status values to Bugzilla status strings.
-        status_in_map: Mapping from Bugzilla status strings to Wintermute Status values.
+    Arguments:
+        * base_url: e.g. "http://host/bugzilla/rest" or "http://host/bugzilla"
+        * api_key:  Bugzilla API key with permissions on your product/component
     """
 
     base_url: str
     api_key: str
-    default_product: str
-    default_component: str
-    default_version: str = "unspecified"
-    timeout: int = 30
+    default_product: Optional[str] = None
+    default_component: Optional[str] = None
 
-    # Never assign None to dict-typed attributes; use default_factory
-    status_out_map: Dict[str, str] = field(default_factory=dict)
-    status_in_map: Dict[str, str] = field(default_factory=dict)
-
-    # Make session definitely-present after __post_init__
-    session: requests.Session = field(init=False, repr=False)
+    # runtime
+    _rest_base: str = ""
+    _session: requests.Session = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        """Initialize the HTTP session and set up headers.
-        Also fills in default status mappings if not provided.
-        """
-        self.session = requests.Session()
-        self.session.headers.update(
+        self._rest_base = _normalize_rest_base(self.base_url)
+        self._session = requests.Session()
+        # Some Bugzilla installs accept header, some only the query param. Do both.
+        self._session.headers.update(
             {
-                "Accept": "application/json",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
                 "X-BUGZILLA-API-KEY": self.api_key,
             }
         )
-        # Fill defaults only if caller didn’t provide a custom mapping
-        if not self.status_out_map:
-            self.status_out_map = {
-                "open": "NEW",
-                "in_progress": "ASSIGNED",
-                "resolved": "RESOLVED",
-                "closed": "CLOSED",
-            }
-        if not self.status_in_map:
-            self.status_in_map = {
-                "NEW": "open",
-                "UNCONFIRMED": "open",
-                "ASSIGNED": "in_progress",
-                "IN_PROGRESS": "in_progress",  # if your instance uses it
-                "RESOLVED": "resolved",
-                "CLOSED": "closed",
-                "VERIFIED": "resolved",
-            }
 
-    # ---------- TicketBackend implementation ----------
+    # ---------- HTTP helpers ----------
 
-    def create(self, data: TicketData) -> str:
-        """Create a new Bugzilla bug from TicketData.
-        Returns the created bug ID as a string.
-        """
-        url = f"{self.base_url}/rest/bug"
-        payload = self._compose_create_payload(data)
-        r = self.session.post(url, data=json.dumps(payload), timeout=self.timeout)
-        self._check(r, "create bug")
-        body = r.json()
-        bug_id = body.get("id")
-        if bug_id is None:
-            raise RuntimeError(f"Bugzilla create: missing id in response: {body}")
-        return str(bug_id)
+    def _u(self, path: str) -> str:
+        return urljoin(self._rest_base, path)
 
-    def read(self, ticket_id: str) -> Tuple[TicketData, List[Comment]]:
-        """Read a Bugzilla bug and its comments by ticket ID.
-        Returns a tuple of TicketData and a list of Comments.
-        """
-        # bug record
-        r_bug = self.session.get(
-            f"{self.base_url}/rest/bug/{ticket_id}",
-            params={
-                "include_fields": "id,summary,status,assigned_to,creator,product,component,version,op_sys,priority,severity"
-            },
-            timeout=self.timeout,
-        )
-        self._check(r_bug, "read bug")
-        bugs = r_bug.json().get("bugs", [])
-        if not bugs:
-            raise RuntimeError(f"Bugzilla read: bug {ticket_id} not found")
-        b = bugs[0]
+    def _q(self, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        q: Dict[str, Any] = {"api_key": self.api_key}
+        if extra:
+            q.update(extra)
+        return q
 
-        # comments
-        r_c = self.session.get(
-            f"{self.base_url}/rest/bug/{ticket_id}/comment", timeout=self.timeout
-        )
-        self._check(r_c, "read comments")
-        j = r_c.json()
-        bug_key = str(ticket_id)
-        bucket = j.get("bugs", {}).get(bug_key) or j.get("bugs", {}).get(
-            int(ticket_id), {}
-        )
-        raw_comments = bucket.get("comments", [])
+    def _check(self, r: requests.Response, action: str) -> None:
+        try:
+            r.raise_for_status()
+        except requests.HTTPError:
+            msg = ""
+            try:
+                js = r.json()
+                msg = js.get("message") or js.get("error") or ""
+            except Exception:
+                pass
+            req = r.request
+            diag = f"{req.method} {req.url} [{r.status_code}] {msg}".strip()
+            if r.status_code == 401:
+                diag += " (auth failed: ensure api_key in query string; some servers ignore the header)"
+            raise RuntimeError(f"Bugzilla {action} failed: {diag}") from None
 
-        comments: List[Comment] = [
-            Comment(
-                author=str(c.get("author", "")),
-                text=str(c.get("text", "")),
-                at=_parse_bugzilla_time(c.get("time")),
-            )
-            for c in raw_comments
-        ]
+    # ---------- Ticket facade methods ----------
 
-        td = self._compose_ticket_data_from_bug(b, comments)
-        return td, comments
+    def create(self, data: Any) -> str:
+        d = _unpack_ticket_like(data)
 
-    def update(self, ticket_id: str, fields: MutableMapping[str, Any]) -> None:
-        """Update a Bugzilla bug with the given fields.
-        Supported fields: title, assignee, status, description (as a comment).
-        Custom fields prefixed with "cf_" are passed through.
-        """
-        comment_text: Optional[str] = None
-
-        payload: Dict[str, Any] = {}
-        if "title" in fields:
-            payload["summary"] = fields.pop("title")
-        if "assignee" in fields:
-            payload["assigned_to"] = fields.pop("assignee")
-        if "status" in fields:
-            sv = fields.pop("status")
-            if isinstance(sv, Status):
-                sv = sv.value
-            payload["status"] = self.status_out_map.get(str(sv), str(sv))
-
-        # pass-through Bugzilla custom fields
-        for k in list(fields.keys()):
-            if str(k).startswith("cf_"):
-                payload[k] = fields.pop(k)
-
-        # emulate description update via a comment
-        if "description" in fields:
-            comment_text = str(fields.pop("description"))
-
-        if payload:
-            r = self.session.put(
-                f"{self.base_url}/rest/bug/{ticket_id}",
-                data=json.dumps(payload),
-                timeout=self.timeout,
-            )
-            self._check(r, "update bug")
-
-        if comment_text:
-            self.add_comment(ticket_id, Comment(author="", text=comment_text))
-
-    def add_comment(self, ticket_id: str, comment: Comment) -> None:
-        """Add a comment to a Bugzilla bug."""
-        r = self.session.post(
-            f"{self.base_url}/rest/bug/{ticket_id}/comment",
-            data=json.dumps({"comment": comment.text}),
-            timeout=self.timeout,
-        )
-        self._check(r, "add comment")
-
-    # ---------- helpers ----------
-
-    def _compose_create_payload(self, d: TicketData) -> Dict[str, Any]:
-        """Compose the payload for creating a Bugzilla bug from TicketData."""
-        cf = d.custom_fields or {}
-        product = str(cf.get("product", self.default_product))
-        component = str(cf.get("component", self.default_component))
-        version = str(cf.get("version", self.default_version))
-
-        if not product or not component or not version:
-            raise ValueError(
-                "Bugzilla create requires product, component, and version "
-                "(provide defaults or via custom_fields)."
+        # allow product/component to come from custom_fields (optional)
+        cf = d.get("custom_fields") or {}
+        product = d.get("product") or cf.get("product") or self.default_product
+        component = d.get("component") or cf.get("component") or self.default_component
+        if not product or not component:
+            raise RuntimeError(
+                "Bugzilla create needs product and component (set defaults or pass via custom_fields)"
             )
 
         payload: Dict[str, Any] = {
             "product": product,
             "component": component,
-            "version": version,
-            "summary": d.title,
-            "description": d.description,  # initial comment
+            "summary": d.get("title", "") or "",
+            "description": d.get("description", "") or "",
         }
-        if d.assignee:
-            payload["assigned_to"] = d.assignee
-        if d.status:
-            payload["status"] = self.status_out_map.get(d.status.value, d.status.value)
 
-        for k, v in cf.items():
-            if str(k).startswith("cf_"):
-                payload[k] = v
-        return payload
+        assignee = d.get("assignee")
+        if isinstance(assignee, str) and assignee:
+            payload["assigned_to"] = assignee
 
-    def _compose_ticket_data_from_bug(
-        self, b: Dict[str, Any], comments: List[Comment]
-    ) -> TicketData:
-        """Compose TicketData from a Bugzilla bug record and its comments."""
-        bz_status = str(b.get("status", "NEW")).upper()
-        ours_str = self.status_in_map.get(bz_status, "open")
-        try:
-            ours = Status(ours_str)
-        except Exception:
-            ours = Status.OPEN
+        requester = d.get("requester")
+        if isinstance(requester, str) and requester:
+            payload["cc"] = [requester]
 
-        return TicketData(
-            title=str(b.get("summary", "")),
-            description=comments[0].text if comments else "",
-            assignee=(b.get("assigned_to") or None),
-            requester=(b.get("creator") or None),
-            status=ours,
-            custom_fields={
-                "product": b.get("product"),
-                "component": b.get("component"),
-                "version": b.get("version"),
-                "op_sys": b.get("op_sys"),
-                "priority": b.get("priority"),
-                "severity": b.get("severity"),
-            },
-            communication=comments,
+        # include arbitrary custom_fields (Bugzilla custom fields like cf_* get merged here)
+        if isinstance(cf, dict):
+            payload.update(cf)
+
+        r = self._session.post(self._u("bug"), params=self._q(), json=payload)
+        self._check(r, "create bug")
+        js = r.json()
+        bug_id = _extract_bug_id(js)
+        if not bug_id:
+            # include payload for debugging, but no secrets should be in the response body
+            raise RuntimeError(
+                f"Bugzilla create bug returned unexpected payload, no id found: {js!r}"
+            )
+        return bug_id
+
+    def read(self, ticket_id: str) -> Tuple["TicketData", List["Comment"]]:
+        """
+        Read a bug from Bugzilla and return (TicketData, [Comment]) for Ticket.read().
+        Description is taken from the first comment; all comments are converted.
+        """
+        from wintermute.tickets import Comment, Status, TicketData
+
+        # 1) bug details
+        r_bug = self._session.get(self._u(f"bug/{ticket_id}"), params=self._q())
+        self._check(r_bug, "read bug")
+        bug = r_bug.json()
+
+        # Some Bugzilla APIs wrap the bug list
+        if (
+            isinstance(bug, dict)
+            and "bugs" in bug
+            and isinstance(bug["bugs"], list)
+            and bug["bugs"]
+        ):
+            bug = bug["bugs"][0]
+
+        # 2) comments
+        r_com = self._session.get(self._u(f"bug/{ticket_id}/comment"), params=self._q())
+        self._check(r_com, "read comments")
+        cjs = r_com.json()
+
+        comments: List[Comment] = []
+        all_comments: List[dict[Any, Any]] = []
+
+        # Newer format: {"bugs": {"<id>": {"comments": [ ... ]}}}
+        bugs_block = cjs.get("bugs")
+        if isinstance(bugs_block, dict):
+            bug_entry = bugs_block.get(str(ticket_id))
+            if isinstance(bug_entry, dict):
+                maybe_comments = bug_entry.get("comments")
+                if isinstance(maybe_comments, list):
+                    all_comments = [c for c in maybe_comments if isinstance(c, dict)]
+
+        # Fallback: {"comments": [ ... ]}
+        if not all_comments:
+            maybe = cjs.get("comments")
+            if isinstance(maybe, list):
+                all_comments = [c for c in maybe if isinstance(c, dict)]
+
+        desc_text = ""
+        for idx, c in enumerate(all_comments):
+            text = str(c.get("text", "") or "")
+            author = str(c.get("author", "") or "")
+            if idx == 0:
+                # First comment typically contains the long description
+                desc_text = text
+            comments.append(Comment(author=author, text=text))
+
+        # 3) map status and fields into TicketData
+        raw_status = str(bug.get("status", "NEW"))
+        status_name = _status_to_ticket(raw_status)  # -> "open", "resolved", etc.
+        status_enum = getattr(Status, status_name.upper(), Status.OPEN)
+
+        td = TicketData(
+            title=str(bug.get("summary", "") or ""),
+            description=desc_text,
+            assignee=(bug.get("assigned_to") or None),
+            requester=(bug.get("creator") or None),
+            status=status_enum,
+            custom_fields={},  # optionally map bug fields here if you want
+            communication=[],  # your Ticket holds comments separately
         )
 
-    def _check(self, resp: requests.Response, action: str) -> None:
-        """Check the HTTP response for errors and raise exceptions as needed."""
+        return td, comments
+
+    def update(self, ticket_id: str, fields: Dict[str, Any]) -> None:
+        """
+        Adapter for Ticket.update().
+
+        Ticket.update(...) calls backend.update(ticket_id, dict(fields)),
+        so here `fields` is a plain dict like {"status": "resolved"} or
+        {"title": "New title", "assignee": "...", "custom_fields": {...}, ...}.
+        """
+        d = fields
+        payload: Dict[str, Any] = {}
+
+        # Title → Bugzilla summary
+        if "title" in d:
+            payload["summary"] = d["title"]
+
+        # Assignee → assigned_to
+        if "assignee" in d and isinstance(d["assignee"], str):
+            payload["assigned_to"] = d["assignee"]
+
+        # Status mapping (Ticket status -> Bugzilla status)
+        sname = _status_name(d.get("status"))
+        if sname:
+            bz_status = _status_from_ticket(sname)
+            payload["status"] = bz_status
+
+        # Description: Bugzilla generally doesn't let you overwrite the original
+        # description directly; we add it as a new comment instead.
+        if "description" in d and isinstance(d["description"], str):
+            self.comment(ticket_id, text=d["description"])
+
+        # Custom fields passthrough (e.g. cf_* fields, resolution, etc.)
+        cf = d.get("custom_fields")
+        if isinstance(cf, dict):
+            payload.update(cf)
+
+        # If we're moving to RESOLVED and no resolution is set, pick a default.
+        # Your instance requires a resolution; "FIXED" is the safest generic default.
+        if payload.get("status") == "RESOLVED" and "resolution" not in payload:
+            payload["resolution"] = "FIXED"
+
+        if payload:
+            r = self._session.put(
+                self._u(f"bug/{ticket_id}"),
+                params=self._q(),
+                json=payload,
+            )
+            self._check(r, "update bug")
+
+    def add_comment(self, ticket_id: str, comment_obj: Any) -> None:
+        """
+        Adapter method for Ticket.comment().
+
+        Ticket.comment(...) creates a Comment object and calls:
+            backend.add_comment(ticket_id, comment)
+
+        So here we accept that Comment instance (or any object with .text/.author)
+        and forward the actual text to the Bugzilla API.
+        """
+        # Local import to avoid circular dependency at module import time
         try:
-            resp.raise_for_status()
-        except requests.HTTPError as e:
-            msg = ""
-            try:
-                j = resp.json()
-                msg = j.get("message") or j.get("error") or ""
-            except Exception:
-                pass
-            raise RuntimeError(f"Bugzilla {action} failed: {e} {msg}".strip()) from None
+            from wintermute.tickets import Comment
+        except Exception:
+            Comment = object  # type: ignore[misc,assignment]
+
+        text: str
+        author: Optional[str] = None
+
+        if isinstance(comment_obj, Comment):
+            # Normal path: real Comment instance
+            text = str(getattr(comment_obj, "text", ""))
+            a = getattr(comment_obj, "author", None)
+            author = str(a) if isinstance(a, str) else None
+        else:
+            # Fallback: treat it as a string-like payload
+            text = str(comment_obj)
+
+        self.comment(ticket_id, text=text, author=author)
+
+    def comment(self, ticket_id: str, text: str, author: Optional[str] = None) -> None:
+        """
+        Low-level Bugzilla comment call.
+        `author` is usually ignored by Bugzilla; it infers from api_key user.
+        """
+        r = self._session.post(
+            self._u(f"bug/{ticket_id}/comment"),
+            params=self._q(),
+            json={"comment": text},
+        )
+        self._check(r, "comment")
