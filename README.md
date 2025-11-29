@@ -38,144 +38,182 @@ The entire framework allows you to create "cartridges," which are modular plugin
 The current class structure is the following:
 
 ```mermaid
+---
+config:
+  layout: elk
+---
 classDiagram
-    %% Core Classes
+    class WintermuteConsole {
+        +__init__(*args, **kwargs)
+        +cmdloop()
+        +load(cartridge_name: str)
+        +unload(cartridge_name: str)
+        +run_script(path: str)
+        +run_pyscript(path: str)
+        +do_load(ns: argparse.Namespace)
+        +do_unload(ns: argparse.Namespace)
+        +do_run_script(ns: argparse.Namespace)
+        +do_run_pyscript(ns: argparse.Namespace)
+    }
     class Operation {
-        +Analysts: List[Analyst]
-        +Devices: List[Device]
-        +Pentests: List[Pentest]
-        +addAnalyst()
-        +addDevice()
-        +addPentest()
+        +__init__(name: str="", metadata: Dict=None)
+        +add_analyst(a: Analyst)
+        +add_device(d: Device)
+        +add_pentest(p: Pentest)
+        +to_dict() -> Dict
+        +from_dict(data: Dict) -> Operation
     }
     class Pentest {
-        +Operation: Operation
-        +Devices: List[Device]
-        +Services: List[Service]
-        +Vulnerabilities: List[Vulnerability]
+        +__init__(name: str="", metadata: Dict=None)
+        +add_device(d: Device)
+        +add_service(s: Service)
+        +add_vulnerability(v: Vulnerability)
+        +to_dict() -> Dict
     }
     class Analyst {
-        +name: str
-        +userid: str
-        +email: str
+        +__init__(name: str="", userid: str="", email: str="")
     }
     class Device {
-        +name: str
-        +services: List[Service]
-        +peripherals: List[Peripheral]
+        +__init__(name: str="", metadata: Dict=None)
+        +add_service(s: Service)
+        +add_peripheral(p: Peripheral)
+        +to_dict() -> Dict
     }
     class Service {
-        +name: str
-        +vulnerabilities: List[Vulnerability]
+        +__init__(name: str="", port: int=0, protocol: str="")
+        +add_vulnerability(v: Vulnerability)
+        +to_dict() -> Dict
     }
     class Vulnerability {
-        +name: str
-        +risk: Risk
+        +__init__(title: str="", severity: str="", description: str="")
+        +to_dict() -> Dict
     }
     class Risk {
-        +level: str
-        +description: str
+        +__init__(level: str="", description: str="")
+        +to_dict() -> Dict
     }
-    class dbController {
+    class DBController {
+        +__init__(backend: str="tinydb")
         +connect()
-        +save()
-        +load()
+        +save(obj)
+        +load(query) -> Any
     }
-    class cartridge {
+    class Cartridge {
         <<interface>>
-        +run()
+        +load()
+        +unload()
+        +run(*args, **kwargs)
     }
-    class User {
-        +username: str
-        +accounts: List[Account]
+    class BaseModel {
+        +__init__(**kwargs)
+        +to_dict() -> Dict
+        +from_dict(data: Dict)
+        +save(db: DBController)
     }
-    class Account {
-        +account_id: str
-        +team: Team
-    }
-    class Team {
-        +members: List[User]
-    }
-
-    %% basemodels.py
     class Peripheral {
-        +name: str
-        +pins: Dict
-        +pType: PeripheralType
+        +__init__(name: str="", pins: Dict=None, pType: PeripheralType=...)
+        +to_dict() -> Dict
     }
     class PeripheralType {
         <<enum>>
-        UART
-        Wifi
-        Ethernet
+        +UART
+        +Wifi
+        +Ethernet
+        +JTAG
+        +Bluetooth
+        +TPM
     }
-
-    %% peripherals.py
     class UART {
-        +baudrate: int
-        +bytesize: int
-        +parity: str
-        +stopbits: int
-        +com_port: str
+        +__init__(name: str="", pins: Dict=None, baudrate: int=9600, bytesize: int=8, parity: str="N", stopbits: int=1, comPort: str="")
+        +open()
+        +close()
+        +send(bytes)
+        +receive() -> bytes
     }
     class Wifi {
-        +SSID: str
-        +password: str
-        +encryption: str
-        +band: str
-        +ipaddress: str
+        +__init__(name: str="", pins: Dict=None, SSID: str="", password: str="", encryption: str="WPA2", band: str="2.4GHz", ipaddress: str="127.0.0.1")
+        +connect()
+        +disconnect()
+        +scan() -> List[Dict]
     }
     class Ethernet {
-        +mac_address: str
-        +ipaddress: str
-        +subnet_mask: str
-        +gateway: str
-        +dns: str
-        +speed: str
-        +duplex: str
+        +__init__(name: str="", pins: Dict=None, mac_address: str="", ipaddress: str|IPv4Address|IPv6Address=None, subnet_mask: str="", gateway: str="", dns: str="", speed: str="1Gbps", duplex: str="full")
+        +configure()
+        +up()
+        +down()
+    }
+    class JTAG {
+        +__init__(...)
+        +connect()
+        +reset()
+    }
+    class Bluetooth {
+        +__init__(...)
+        +pair()
+        +scan()
+    }
+    class TPMPeripheral {
+        +__init__(...)
+        +init()
+        +send_command(cmd)
     }
 
-    %% findings.py
+    Peripheral <|-- UART
+    Peripheral <|-- Wifi
+    Peripheral <|-- Ethernet
+    Peripheral <|-- JTAG
+    Peripheral <|-- Bluetooth
+    Peripheral <|-- TPMPeripheral
     class Finding {
-        +title: str
-        +description: str
-        +severity: str
-        +references: List[str]
+        +__init__(title: str="", description: str="", severity: str="", references: List=None)
+        +to_dict() -> Dict
+        +from_dict(data: Dict) -> Finding
+        +format() -> str
     }
-
-    %% utils/
     class ParserUtil {
-        +parse_device()
-        +parse_service()
+        +parse_device(payload: str) -> Device
+        +parse_service(payload: str) -> Service
+        +parse_peripheral(payload: str) -> Peripheral
     }
     class FindingUtil {
-        +parse_finding()
-        +format_finding()
+        +parse_finding(payload: str) -> Finding
+        +format_finding(f: Finding) -> str
+        +export_findings(findings: List[Finding], format: str="json")
     }
     class RiskUtil {
-        +calculate_risk()
+        +calculate_risk(vuln: Vulnerability) -> Risk
+        +score_to_level(score: int) -> str
     }
-
-    %% Relationships
+    class BugzillaBackend {
+        +create_ticket(finding: Finding) -> str
+        +update_ticket(ticket_id: str, data: Dict)
+    }
+    class DOCXReports {
+        +render_report(operation: Operation) -> bytes
+        +save(path: str)
+    }
+    class TPM20Cartridge {
+        +load()
+        +unload()
+        +fuzz(params: Dict)
+        +provision()
+    }
+    class IoTCartridge {
+        +load()
+        +unload()
+        +scan_devices() -> List[Device]
+    }
     Operation "1" o-- "*" Analyst
     Operation "1" o-- "*" Device
     Operation "1" o-- "*" Pentest
     Pentest "1" o-- "*" Device
     Pentest "1" o-- "*" Service
-    Pentest "1" o-- "*" Vulnerability
     Device "1" o-- "*" Service
     Device "1" o-- "*" Peripheral
     Service "1" o-- "*" Vulnerability
     Vulnerability "1" o-- "1" Risk
-    User "1" o-- "*" Account
-    Account "1" o-- "1" Team
-    Team "1" o-- "*" User
-
-    Peripheral <|-- UART
-    Peripheral <|-- Wifi
-    Peripheral <|-- Ethernet
-
-    %% utils relationships (example usage)
+    Cartridge <|.. TPM20Cartridge
+    Cartridge <|.. IoTCartridge
     ParserUtil ..> Device
     ParserUtil ..> Service
     FindingUtil ..> Finding
