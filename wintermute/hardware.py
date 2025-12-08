@@ -67,30 +67,3 @@ class Memory(BaseModel):
 
     __schema__ = {}
     __enums__ = {}
-
-
-# Enrich functions
-
-
-def ai_enrich_processor(processor: Processor) -> Processor:
-    import json
-
-    from .ai.bootstrap import init_router
-    from .ai.use import simple_chat
-
-    router = init_router()
-    answer = simple_chat(
-        router,
-        f"Provide me with the processor name as processor, core, instruction set, number of cpu_cores, key features, processor family, \
-        description, manufacturer, model, architecture, endianness and overall capabilities of the {processor.processor} processor, in the \
-        architecture field encompass the core, instruction_set, cpu_cores and key_features. Respond with only the json format with each \
-        capability and characteristics, including the general pinout, boot pinout, JTAG pinout, UART pinout as pinout in the json",
-        task_tag="ProcessorEnrichment",
-    )
-    try:
-        answer_json = json.loads(answer)
-        _processor = Processor.from_dict(answer_json)
-    except Exception as e:
-        print(f"Error parsing AI response: {e}")
-        return processor
-    return _processor
