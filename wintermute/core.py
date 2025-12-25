@@ -37,13 +37,14 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence
 
 from tinydb import TinyDB
 
-from .basemodels import BaseModel, CloudAccount, Peripheral
-from .findings import Vulnerability
+from .basemodels import BaseModel, CloudAccount, Peripheral, PeripheralType
+from .findings import ReproductionStep, Vulnerability
 
 __all__ = [
     "Device",
@@ -544,6 +545,198 @@ class Analyst(BaseModel):
         return True if not None else False
 
 
+# ---------------------------------------------------------------------------
+# Test Plans + Test Runs (declarative plans, operational run records)
+# ---------------------------------------------------------------------------
+
+
+class BindKind(str, Enum):
+    device = "device"
+    peripheral = "peripheral"
+
+
+class BindCardinality(str, Enum):
+    one = "one"
+    many = "many"
+    at_least_one = "at_least_one"
+
+
+class ExecutionMode(str, Enum):
+    once = "once"
+    per_device = "per_device"
+    per_binding = "per_binding"
+
+
+class RunStatus(str, Enum):
+    not_run = "not_run"
+    in_progress = "in_progress"
+    passed = "passed"
+    failed = "failed"
+    blocked = "blocked"
+    not_applicable = "not_applicable"
+
+
+class ObjectSelector(BaseModel):
+    """Declarative selector stored in JSON; resolved against Operation at runtime."""
+
+    __enums__ = {"kind": BindKind, "cardinality": BindCardinality}
+
+    kind: BindKind
+    name: str
+    cardinality: BindCardinality
+    where: dict[str, Any]
+
+    def __init__(
+        self,
+        kind: BindKind,
+        name: str,
+        where: Optional[dict[str, Any]] = None,
+        cardinality: BindCardinality = BindCardinality.many,
+    ) -> None:
+        self.kind = kind
+        self.name = name
+        self.where = where or {}
+        self.cardinality = cardinality
+
+
+class TargetScope(BaseModel):
+    __schema__ = {"bindings": ObjectSelector}
+
+    tags: list[str]
+    bindings: list[ObjectSelector]
+
+    def __init__(
+        self,
+        tags: Optional[list[str]] = None,
+        bindings: Optional[list[ObjectSelector]] = None,
+    ) -> None:
+        self.tags = tags or []
+        self.bindings = bindings or []
+
+
+class TestCase(BaseModel):
+    """Declarative test case: scope selectors + reproduction steps."""
+
+    __schema__ = {"target_scope": TargetScope, "steps": ReproductionStep}
+    __enums__ = {"execution_mode": ExecutionMode}
+
+    code: str
+    name: str
+    description: str
+
+    target_scope: TargetScope
+    steps: list[ReproductionStep]
+
+    executed: bool
+    execution_mode: ExecutionMode
+    execution_binding: str
+
+    def __init__(
+        self,
+        code: str,
+        name: str,
+        description: str,
+        target_scope: Optional[TargetScope] = None,
+        steps: Optional[list[ReproductionStep]] = None,
+        executed: bool = False,
+        execution_mode: ExecutionMode = ExecutionMode.once,
+        execution_binding: str = "",
+    ) -> None:
+        self.code = code
+        self.name = name
+        self.description = description
+        self.target_scope = target_scope or TargetScope()
+        self.steps = steps or []
+        self.executed = executed
+        self.execution_mode = execution_mode
+        self.execution_binding = execution_binding
+
+
+class TestPlan(BaseModel):
+    """A plan can contain test cases and nested plans (HW, Web/API, Network)."""
+
+    __schema__ = {"test_cases": TestCase, "test_plans": "TestPlan"}
+
+    code: str
+    name: str
+    description: str
+    test_cases: list[TestCase]
+    test_plans: list["TestPlan"]
+
+    def __init__(
+        self,
+        code: str,
+        name: str,
+        description: str,
+        test_cases: Optional[list[TestCase]] = None,
+        test_plans: Optional[list["TestPlan"]] = None,
+    ) -> None:
+        self.code = code
+        self.name = name
+        self.description = description
+        self.test_cases = test_cases or []
+        self.test_plans = test_plans or []
+
+
+class BoundObjectRef(BaseModel):
+    kind: str
+    object_id: str
+    alias: str
+
+    def __init__(self, kind: str, object_id: str, alias: str) -> None:
+        self.kind = kind
+        self.object_id = object_id
+        self.alias = alias
+
+
+class TestCaseRun(BaseModel):
+    __schema__ = {"bound": BoundObjectRef, "findings": Vulnerability}
+    __enums__ = {"status": RunStatus}
+
+    run_id: str
+    test_case_code: str
+    status: RunStatus
+
+    started_at: datetime | None
+    ended_at: datetime | None
+
+    executed_by: str
+    notes: str
+
+    bound: list[BoundObjectRef]
+    findings: list[Vulnerability]
+
+    def __init__(
+        self,
+        run_id: str,
+        test_case_code: str,
+        status: RunStatus = RunStatus.not_run,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        executed_by: str = "",
+        notes: str = "",
+        bound: Optional[list[BoundObjectRef]] = None,
+        findings: Optional[list[Vulnerability]] = None,
+    ) -> None:
+        self.run_id = run_id
+        self.test_case_code = test_case_code
+        self.status = status
+        self.started_at = started_at
+        self.ended_at = ended_at
+        self.executed_by = executed_by
+        self.notes = notes
+        self.bound = bound or []
+        self.findings = findings or []
+
+    def start(self) -> None:
+        if self.started_at is None:
+            self.started_at = datetime.now(timezone.utc)
+
+    def finish(self) -> None:
+        if self.ended_at is None:
+            self.ended_at = datetime.now(timezone.utc)
+
+
 class Operation(BaseModel):
     """This class contains the information about the operation including devices, analysts and name of the operation.
 
@@ -631,6 +824,255 @@ class Operation(BaseModel):
             self.awsaccounts.append(
                 AWSAccount.from_dict(acc) if isinstance(acc, dict) else acc
             )
+        # test plans + runs (optional; allows multiple plans per operation)
+        self.test_plans: list[TestPlan] = []
+        for tp in self.test_plans or []:
+            self.test_plans.append(
+                TestPlan.from_dict(tp) if isinstance(tp, dict) else tp
+            )
+
+        self.test_runs: list[TestCaseRun] = []
+        for tr in self.test_runs or []:
+            self.test_runs.append(
+                TestCaseRun.from_dict(tr) if isinstance(tr, dict) else tr
+            )
+
+    def addTestPlan(self, plan: TestPlan | dict[str, Any]) -> bool:
+        """Attach a TestPlan to this Operation. Supports multiple plans per operation."""
+        tp = plan if isinstance(plan, TestPlan) else TestPlan.from_dict(plan)
+        if tp not in self.test_plans:
+            self.test_plans.append(tp)
+            return True
+        return False
+
+    def iterTestCases(self) -> list[TestCase]:
+        """Return all test cases across all attached plans (including nested)."""
+        out: list[TestCase] = []
+
+        def walk(p: TestPlan) -> None:
+            out.extend(p.test_cases)
+            for sub in p.test_plans:
+                walk(sub)
+
+        for p in self.test_plans:
+            walk(p)
+        return out
+
+    def resolveBindings(self, tc: TestCase) -> dict[str, list[Any]]:
+        """Resolve tc.target_scope.bindings against current Operation devices/peripherals."""
+        resolved: dict[str, list[Any]] = {}
+
+        # Devices
+        for sel in tc.target_scope.bindings:
+            if sel.kind != BindKind.device:
+                continue
+            where = sel.where or {}
+            host = str(where.get("hostname", "")).strip()
+            fqdn = str(where.get("fqdn", "")).strip()
+
+            matches: list[Device] = []
+            for d in self.devices:
+                if host and getattr(d, "hostname", "") != host:
+                    continue
+                if fqdn and getattr(d, "fqdn", "") != fqdn:
+                    continue
+                matches.append(d)
+
+            resolved[sel.name] = matches
+            if sel.cardinality == BindCardinality.one and len(matches) != 1:
+                raise ValueError(
+                    f"{tc.code}: binding '{sel.name}' expected 1 device, got {len(matches)}"
+                )
+            if sel.cardinality == BindCardinality.at_least_one and len(matches) < 1:
+                raise ValueError(
+                    f"{tc.code}: binding '{sel.name}' expected >=1 device, got 0"
+                )
+
+        # Peripherals
+        for sel in tc.target_scope.bindings:
+            if sel.kind != BindKind.peripheral:
+                continue
+            where = sel.where or {}
+
+            dev_alias = where.get("device")
+            devs: list[Device]
+            if isinstance(dev_alias, str) and dev_alias in resolved:
+                devs = [x for x in resolved[dev_alias] if isinstance(x, Device)]
+            else:
+                devs = list(self.devices)
+
+            # pType matching by NAME ("UART") or int
+            want_ptype: PeripheralType | None = None
+            ptype = where.get("pType")
+            if isinstance(ptype, PeripheralType):
+                want_ptype = ptype
+            elif isinstance(ptype, str):
+                try:
+                    want_ptype = PeripheralType[ptype]
+                except KeyError:
+                    want_ptype = None
+            elif isinstance(ptype, int):
+                try:
+                    want_ptype = PeripheralType(ptype)
+                except ValueError:
+                    want_ptype = None
+
+            name = str(where.get("name", "")).strip()
+
+            matches_p: list[Peripheral] = []
+            for d in devs:
+                for p in getattr(d, "peripherals", []):
+                    if name and getattr(p, "name", "") != name:
+                        continue
+                    if (
+                        want_ptype is not None
+                        and getattr(p, "pType", None) != want_ptype
+                    ):
+                        continue
+                    matches_p.append(p)
+
+            resolved[sel.name] = matches_p
+            if sel.cardinality == BindCardinality.one and len(matches_p) != 1:
+                raise ValueError(
+                    f"{tc.code}: binding '{sel.name}' expected 1 peripheral, got {len(matches_p)}"
+                )
+            if sel.cardinality == BindCardinality.at_least_one and len(matches_p) < 1:
+                known = [d.hostname for d in self.devices]
+                raise ValueError(
+                    f"{tc.code}: binding '{sel.name}' expected >=1 peripheral, got 0"
+                    f"where={sel.where!r}; known_hostnames={known!r}"
+                )
+
+        return resolved
+
+    def createRunsForTestCase(self, tc: TestCase) -> list[TestCaseRun]:
+        """Create 1..N TestCaseRun objects for a test case based on tc.execution_mode."""
+        resolved = self.resolveBindings(tc)
+        runs: list[TestCaseRun] = []
+
+        def device_object_id(d: Device) -> str:
+            # No code/id on Device in current model; use hostname/fqdn for now.
+            return str(getattr(d, "hostname", "")) or str(getattr(d, "fqdn", ""))
+
+        def find_parent_device(per: Peripheral) -> Device | None:
+            for d in self.devices:
+                if per in getattr(d, "peripherals", []):
+                    return d
+            return None
+
+        def peripheral_object_id(p: Peripheral, parent: Device | None) -> str:
+            if parent is not None:
+                return f"{device_object_id(parent)}:{getattr(p, 'name', '')}"
+            return str(getattr(p, "name", ""))
+
+        if tc.execution_mode == ExecutionMode.once:
+            runs.append(TestCaseRun(run_id=f"{tc.code}:1", test_case_code=tc.code))
+            return runs
+
+        if tc.execution_mode == ExecutionMode.per_device:
+            # If any device binding exists, use its matches; else all devices.
+            devs: list[Device] = []
+            for sel in tc.target_scope.bindings:
+                if sel.kind == BindKind.device:
+                    devs = [
+                        x for x in resolved.get(sel.name, []) if isinstance(x, Device)
+                    ]
+                    break
+            if not devs:
+                devs = list(self.devices)
+
+            for i, d in enumerate(devs, 1):
+                runs.append(
+                    TestCaseRun(
+                        run_id=f"{tc.code}:dev{i}",
+                        test_case_code=tc.code,
+                        bound=[
+                            BoundObjectRef(
+                                kind="device",
+                                object_id=device_object_id(d),
+                                alias="dut",
+                            )
+                        ],
+                    )
+                )
+            return runs
+
+        if tc.execution_mode == ExecutionMode.per_binding:
+            alias = tc.execution_binding.strip()
+            objs = resolved.get(alias, [])
+            for i, obj in enumerate(objs, 1):
+                if isinstance(obj, Peripheral):
+                    parent = find_parent_device(obj)
+                    runs.append(
+                        TestCaseRun(
+                            run_id=f"{tc.code}:{alias}{i}",
+                            test_case_code=tc.code,
+                            bound=[
+                                BoundObjectRef(
+                                    kind="peripheral",
+                                    object_id=peripheral_object_id(obj, parent),
+                                    alias=alias,
+                                )
+                            ],
+                        )
+                    )
+                elif isinstance(obj, Device):
+                    runs.append(
+                        TestCaseRun(
+                            run_id=f"{tc.code}:{alias}{i}",
+                            test_case_code=tc.code,
+                            bound=[
+                                BoundObjectRef(
+                                    kind="device",
+                                    object_id=device_object_id(obj),
+                                    alias=alias,
+                                )
+                            ],
+                        )
+                    )
+            return runs
+
+        return runs
+
+    def generateTestRuns(self, *, replace: bool = False) -> list[TestCaseRun]:
+        """Generate runs for every test case across all attached plans."""
+        if replace:
+            self.test_runs = []
+        created: list[TestCaseRun] = []
+        existing = {r.run_id for r in self.test_runs}
+        for tc in self.iterTestCases():
+            for r in self.createRunsForTestCase(tc):
+                if r.run_id not in existing:
+                    self.test_runs.append(r)
+                    existing.add(r.run_id)
+                    created.append(r)
+        return created
+
+    def statusReport(self, start: datetime, end: datetime) -> dict[str, Any]:
+        """Stats for runs whose started_at/ended_at fall within [start, end)."""
+        total = 0
+        by_status: dict[str, int] = {}
+
+        for r in self.test_runs:
+            ts = r.started_at or r.ended_at
+            if ts is None:
+                continue
+            if not (start <= ts < end):
+                continue
+            total += 1
+            k = r.status.name
+            by_status[k] = by_status.get(k, 0) + 1
+
+        return {
+            "start": start.isoformat().replace("+00:00", "Z")
+            if start.tzinfo
+            else start.isoformat(),
+            "end": end.isoformat().replace("+00:00", "Z")
+            if end.tzinfo
+            else end.isoformat(),
+            "total_runs": total,
+            "by_status": by_status,
+        }
 
     @property
     def dbOperation(self) -> TinyDB:
@@ -658,10 +1100,34 @@ class Operation(BaseModel):
                 return True
         return False
 
+    def getDeviceByHostname(self, hostname: str) -> Optional[Device]:
+        for d in self.devices:
+            if d.hostname == hostname:
+                return d
+        return None
+
     def addDevice(
-        self, hostname: str, ipaddr: str, macaddr: str, operatingsystem: str, fqdn: str
+        self,
+        hostname: str,
+        ipaddr: str = "127.0.0.1",
+        macaddr: str = "",
+        operatingsystem: str = "",
+        fqdn: str = "",
+        *,
+        ipAddress: Optional[str] = None,
+        macAddress: Optional[str] = None,
+        os: Optional[str] = None,
     ) -> bool:
-        """Add a device to the operation"""
+        """Add a device to the operation (supports legacy keyword aliases)."""
+
+        # legacy aliases override
+        if ipAddress is not None:
+            ipaddr = ipAddress
+        if macAddress is not None:
+            macaddr = macAddress
+        if os is not None:
+            operatingsystem = os
+
         d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
         if d not in self.devices:
             self.devices.append(d)

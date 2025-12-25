@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 import inspect
 import ipaddress
 import json
+import sys
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -142,6 +143,8 @@ class BaseModel:
             return None
 
         def coerce_scalar(key: str, val: Any) -> Any:
+            if val is None:
+                return None
             # Enums (opt-in via __enums__)
             if key in enums:
                 et = enums[key]
@@ -172,6 +175,37 @@ class BaseModel:
         for key, val in data.items():
             if key in schema:
                 subcls = schema[key]
+                if isinstance(subcls, str):
+                    resolved: object | None = None
+
+                    # Prefer resolving from type hints (already get_type_hints(cls) above)
+                    hinted = ann.get(key)
+                    if hinted is not None:
+                        origin = get_origin(hinted)
+                        args = get_args(hinted)
+
+                        # list[T] / set[T] / tuple[T,...]
+                        if origin in (list, set, tuple) and args:
+                            if isinstance(args[0], type):
+                                resolved = args[0]
+                        # direct T
+                        elif isinstance(hinted, type):
+                            resolved = hinted
+
+                    # Fallback: resolve from the module where cls is defined
+                    if resolved is None:
+                        mod = sys.modules.get(cls.__module__)
+                        if mod is not None and hasattr(mod, subcls):
+                            cand = getattr(mod, subcls)
+                            if isinstance(cand, type):
+                                resolved = cand
+
+                    if resolved is None:
+                        raise TypeError(
+                            f"Could not resolve schema type '{subcls}' for field '{key}' on {cls.__name__}"
+                        )
+
+                    subcls = resolved
                 if isinstance(val, list):
                     out_list: list[Any] = []
                     for v in val:
@@ -216,6 +250,8 @@ class BaseModel:
             if not hasattr(obj, k):
                 continue
             cur = getattr(obj, k)
+            if cur is None:
+                continue
             # skip nested/containers
             if isinstance(cur, (BaseModel, list, dict)):
                 continue

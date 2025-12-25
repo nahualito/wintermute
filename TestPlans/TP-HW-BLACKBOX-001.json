@@ -1,0 +1,937 @@
+{
+  "code": "TP-HW-BLACKBOX-001",
+  "name": "Hardware Penetration Testing - Blackbox Comprehensive",
+  "description": "Blackbox hardware security assessment plan covering board discovery, debug interfaces, buses, storage/memory, boot chain, and TPM 2.0. Intended for authorized lab testing with evidence-driven execution and per-peripheral runs.",
+  "test_cases": [
+    {
+      "code": "IOT-HW-GEN-001",
+      "name": "Engagement safety & handling constraints",
+      "description": "Confirm constraints (no destructive tests unless approved), ESD handling, power limits, and evidence handling.",
+      "target_scope": {
+        "tags": ["hardware", "blackbox", "safety"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Confirm scope and constraints",
+          "description": "Document allowed actions (power-cycling, disassembly, probing), prohibited actions, and approval path for destructive steps.",
+          "tool": "procedure",
+          "action": "document",
+          "confidence": 90,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Prepare evidence collection",
+          "description": "Define artifact naming, storage location, and chain-of-custody. Record device identifiers.",
+          "tool": "procedure",
+          "action": "document",
+          "confidence": 90,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    {
+      "code": "IOT-HW-DISC-001",
+      "name": "Board survey & component identification",
+      "description": "Survey PCB, identify major ICs (SoC, flash, RAM, PMIC), headers/test pads, shielding, and any labeled interfaces.",
+      "target_scope": {
+        "tags": ["hardware", "recon", "board"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "High-resolution photos of PCB (both sides)",
+          "description": "Capture readable markings, connector pinouts, and test pads. Note revisions and silkscreen labels.",
+          "tool": "camera",
+          "action": "collect",
+          "confidence": 80,
+          "arguments": ["top", "bottom", "macro"],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Identify storage & memory devices",
+          "description": "Record flash type (NOR/NAND/eMMC/UFS), RAM packaging, and any removable media presence.",
+          "tool": "visual-inspection",
+          "action": "enumerate",
+          "confidence": 70,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    {
+      "code": "IOT-HW-DISC-002",
+      "name": "Unknown pads/pins identification workflow",
+      "description": "Characterize unlabelled test pads/headers (power, ground, likely serial, likely debug) and create candidate peripheral objects.",
+      "target_scope": {
+        "tags": ["hardware", "pads", "unknown"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "unk",
+            "where": { "device": "dut", "pType": "Unknown" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "unk",
+      "steps": [
+        {
+          "title": "Map ground and power candidates",
+          "description": "Identify likely GND/VCC reference points and measure idle behavior on unknown pads.",
+          "tool": "multimeter/scope",
+          "action": "characterize",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Classify signal behavior",
+          "description": "Observe boot-time activity; note steady clock-like signals vs bursty UART-like signals vs idle-high lines.",
+          "tool": "logic-analyzer",
+          "action": "characterize",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Update inventory",
+          "description": "Rename peripheral candidates and update pins mapping (tx/rx/tck/tms/scl/sda/cs/clk/miso/mosi) based on observations.",
+          "tool": "wintermute",
+          "action": "model-update",
+          "confidence": 70,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- UART ----------------
+    {
+      "code": "IOT-HW-UART-001",
+      "name": "UART discovery & console exposure",
+      "description": "Identify UART consoles and determine whether they expose sensitive boot logs, login prompts, or privileged shells.",
+      "target_scope": {
+        "tags": ["uart", "console"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "uart",
+            "where": { "device": "dut", "pType": "UART" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "uart",
+      "steps": [
+        {
+          "title": "Capture boot-time serial output",
+          "description": "Record complete boot output and prompts, including timestamps and banner strings.",
+          "tool": "serial-capture",
+          "action": "collect",
+          "confidence": 80,
+          "arguments": ["capture_boot_log"],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Assess authentication boundary",
+          "description": "Determine whether access requires credentials and whether privilege separation exists.",
+          "tool": "manual",
+          "action": "validate",
+          "confidence": 70,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-UART-002",
+      "name": "UART bootloader interaction surface",
+      "description": "Determine if a bootloader console is reachable and what configuration is visible (environment, boot targets, recovery).",
+      "target_scope": {
+        "tags": ["uart", "bootloader"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "uart",
+            "where": { "device": "dut", "pType": "UART" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "uart",
+      "steps": [
+        {
+          "title": "Identify boot stages and prompts",
+          "description": "From the captured log, identify ROM/bootloader/kernel markers and whether configuration is disclosed.",
+          "tool": "manual",
+          "action": "analyze",
+          "confidence": 70,
+          "arguments": ["bootlog_review"],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Check for secrets in console output",
+          "description": "Look for tokens, API keys, Wi-Fi credentials, device unique secrets, debug flags, or crash dumps printed to console.",
+          "tool": "manual",
+          "action": "review",
+          "confidence": 70,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- JTAG / SWD ----------------
+    {
+      "code": "IOT-HW-JTAG-001",
+      "name": "JTAG presence & boundary discovery",
+      "description": "Determine whether JTAG is present and reachable; document header/pad mapping and any observable chain behavior.",
+      "target_scope": {
+        "tags": ["jtag", "debug"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "jtag",
+            "where": { "device": "dut", "pType": "JTAG" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "jtag",
+      "steps": [
+        {
+          "title": "Validate pin mapping",
+          "description": "Confirm TCK/TMS/TDI/TDO/TRST/NRST candidates and document voltage levels.",
+          "tool": "scope/multimeter",
+          "action": "validate",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Assess debug lock status (non-destructive)",
+          "description": "Determine whether debug access appears disabled/locked and record observable indicators and errors.",
+          "tool": "debug-probe",
+          "action": "enumerate",
+          "confidence": 50,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-SWD-001",
+      "name": "SWD presence & debug access check",
+      "description": "Determine whether SWD is present and reachable; document pinout and whether the target responds.",
+      "target_scope": {
+        "tags": ["swd", "debug"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "swd",
+            "where": { "device": "dut", "pType": "SWD" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "swd",
+      "steps": [
+        {
+          "title": "Confirm SWDIO/SWCLK candidates",
+          "description": "Validate likely SWD pins and document reset behavior.",
+          "tool": "scope/multimeter",
+          "action": "validate",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Non-invasive access assessment",
+          "description": "Check whether the debug port responds and whether access appears restricted.",
+          "tool": "debug-probe",
+          "action": "enumerate",
+          "confidence": 50,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- I2C / SPI ----------------
+    {
+      "code": "IOT-HW-I2C-001",
+      "name": "I2C bus identification & address census",
+      "description": "Identify I2C buses, capture traffic if present, and enumerate device addresses non-destructively.",
+      "target_scope": {
+        "tags": ["i2c", "bus"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "i2c",
+            "where": { "device": "dut", "pType": "I2C" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "i2c",
+      "steps": [
+        {
+          "title": "Confirm SCL/SDA and pull-ups",
+          "description": "Validate likely SCL/SDA lines and confirm expected idle levels/pull-ups.",
+          "tool": "scope",
+          "action": "validate",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Census of responding addresses",
+          "description": "Enumerate responding addresses and record them as inventory evidence.",
+          "tool": "i2c-tooling",
+          "action": "enumerate",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-SPI-001",
+      "name": "SPI bus identification & chip-select mapping",
+      "description": "Identify SPI buses and chip selects; determine if traffic indicates external flash, sensors, radios, or secure elements.",
+      "target_scope": {
+        "tags": ["spi", "bus"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "spi",
+            "where": { "device": "dut", "pType": "SPI" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "spi",
+      "steps": [
+        {
+          "title": "Validate CLK/MOSI/MISO/CS candidates",
+          "description": "Confirm likely SPI pins and identify chip select lines by activity patterns.",
+          "tool": "logic-analyzer",
+          "action": "characterize",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Classify peripheral types",
+          "description": "Correlate bus activity with suspected components (flash, radio, sensor) and document evidence.",
+          "tool": "manual",
+          "action": "analyze",
+          "confidence": 50,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- TPM 2.0 ----------------
+    {
+      "code": "IOT-HW-TPM-001",
+      "name": "TPM presence & interface identification",
+      "description": "Determine whether a TPM 2.0 is present (discrete or firmware) and document interface (I2C/SPI/LPC/CRB) and basic properties.",
+      "target_scope": {
+        "tags": ["tpm", "tpm2", "secure-element"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "tpm",
+            "where": { "device": "dut", "pType": "TPM" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "tpm",
+      "steps": [
+        {
+          "title": "Confirm TPM presence indicators",
+          "description": "Validate the TPM device/component and record identifiers and interface hints from board inspection or bus behavior.",
+          "tool": "manual",
+          "action": "enumerate",
+          "confidence": 50,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Non-invasive TPM capability summary",
+          "description": "If you have legitimate access via OS/firmware tooling, record TPM version, manufacturer, and enabled features without altering state.",
+          "tool": "tpm2-tools/os",
+          "action": "collect",
+          "confidence": 50,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-TPM-002",
+      "name": "TPM policy & operational posture review",
+      "description": "Assess whether TPM is configured in a way that meaningfully protects keys/measurements (at a high level) and document gaps.",
+      "target_scope": {
+        "tags": ["tpm", "policy", "configuration"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          },
+          {
+            "kind": "peripheral",
+            "name": "tpm",
+            "where": { "device": "dut", "pType": "TPM" },
+            "cardinality": "many"
+          }
+        ]
+      },
+      "execution_mode": "per_binding",
+      "execution_binding": "tpm",
+      "steps": [
+        {
+          "title": "Record configured usage signals",
+          "description": "Document whether measured boot, attestation, or sealed storage appears used; capture evidence (logs/config) where available.",
+          "tool": "manual",
+          "action": "review",
+          "confidence": 40,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- Memory / Storage / Boot ----------------
+    {
+      "code": "IOT-HW-MEM-001",
+      "name": "External flash identification & access posture",
+      "description": "Identify external flash (NOR/NAND/eMMC/UFS) and document access posture (socketed, exposed test points, removable media).",
+      "target_scope": {
+        "tags": ["flash", "storage", "boot"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Identify flash type and package",
+          "description": "Document flash packaging and any access convenience (test clips, header).",
+          "tool": "visual-inspection",
+          "action": "enumerate",
+          "confidence": 70,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-MEM-002",
+      "name": "Firmware image acquisition planning",
+      "description": "Determine the least invasive method to acquire firmware image (vendor update packages, on-device retrieval, external read where approved).",
+      "target_scope": {
+        "tags": ["firmware", "acquisition"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Identify official firmware sources",
+          "description": "Collect vendor update packages and document versioning. Prefer official sources for blackbox baseline.",
+          "tool": "manual",
+          "action": "collect",
+          "confidence": 70,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        },
+        {
+          "title": "Determine image integrity metadata",
+          "description": "Record hashes/signature presence as evidence inputs for later verification steps.",
+          "tool": "hashing",
+          "action": "collect",
+          "confidence": 80,
+          "arguments": ["sha256"],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-BOOT-001",
+      "name": "Boot chain observation & security posture",
+      "description": "Observe boot flow signals (secure boot indicators, recovery modes, debug banners) and document inferred posture without bypass attempts.",
+      "target_scope": {
+        "tags": ["boot", "secure-boot", "posture"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Collect boot indicators",
+          "description": "Record any visible/serial boot messages, recovery menus, or LED patterns indicating boot state transitions.",
+          "tool": "manual",
+          "action": "collect",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- ROM/RAM/BIOS-like components ----------------
+    {
+      "code": "IOT-HW-CHIP-001",
+      "name": "ROM/boot ROM & masked ROM indicators",
+      "description": "Identify whether boot is from masked ROM + external flash, and document any ROM-relevant identifiers.",
+      "target_scope": {
+        "tags": ["rom", "bootrom"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Document ROM-relevant evidence",
+          "description": "Record SoC markings and any public ROM references (part number, boot mode pins, strap resistors).",
+          "tool": "visual-inspection",
+          "action": "document",
+          "confidence": 50,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+    {
+      "code": "IOT-HW-MEM-003",
+      "name": "RAM presence & exposure indicators",
+      "description": "Identify RAM type and any exposure indicators (test points, unpopulated connectors).",
+      "target_scope": {
+        "tags": ["ram", "ddr", "memory"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Document RAM type and placement",
+          "description": "Record RAM package type and adjacency to SoC; note if accessible or shielded.",
+          "tool": "visual-inspection",
+          "action": "document",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    },
+
+    // ---------------- Power/Reset/Straps ----------------
+    {
+      "code": "IOT-HW-PWR-001",
+      "name": "Power/reset/strap points mapping",
+      "description": "Identify reset points, boot mode straps, and power domains for reproducible testing and evidence capture.",
+      "target_scope": {
+        "tags": ["power", "reset", "straps"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "dut",
+            "where": { "hostname": "h" },
+            "cardinality": "one"
+          }
+        ]
+      },
+      "execution_mode": "once",
+      "execution_binding": "",
+      "steps": [
+        {
+          "title": "Locate reset and boot strap indicators",
+          "description": "Document buttons, pads, resistors, and labeled signals related to boot modes.",
+          "tool": "visual-inspection",
+          "action": "enumerate",
+          "confidence": 60,
+          "arguments": [],
+          "vulnOutput": null,
+          "fixOutput": null
+        }
+      ],
+      "executed": false
+    }
+  ],
+  "test_plans": [
+    {
+      "code": "TP-HW-UART",
+      "name": "UART Focus Plan",
+      "description": "UART identification, console exposure, and configuration evidence capture.",
+      "test_cases": [
+        {
+          "code": "IOT-HW-UART-003",
+          "name": "UART credential & session hygiene check",
+          "description": "Assess whether console access leaks credentials or allows insecure session handling (high-level evidence-based).",
+          "target_scope": {
+            "tags": ["uart", "auth", "secrets"],
+            "bindings": [
+              {
+                "kind": "device",
+                "name": "dut",
+                "where": { "hostname": "h" },
+                "cardinality": "one"
+              },
+              {
+                "kind": "peripheral",
+                "name": "uart",
+                "where": { "device": "dut", "pType": "UART" },
+                "cardinality": "many"
+              }
+            ]
+          },
+          "execution_mode": "per_binding",
+          "execution_binding": "uart",
+          "steps": [
+            {
+              "title": "Review console output for sensitive data",
+              "description": "Check for printed credentials, tokens, stack traces, or environment variables that would materially reduce attack cost.",
+              "tool": "manual",
+              "action": "review",
+              "confidence": 70,
+              "arguments": [],
+              "vulnOutput": null,
+              "fixOutput": null
+            }
+          ],
+          "executed": false
+        }
+      ],
+      "test_plans": []
+    },
+
+    {
+      "code": "TP-HW-DEBUG",
+      "name": "Debug Interfaces Focus Plan",
+      "description": "JTAG/SWD presence, access posture, and evidence capture for debug state.",
+      "test_cases": [
+        {
+          "code": "IOT-HW-DEBUG-001",
+          "name": "Debug interface inventory validation",
+          "description": "Cross-check identified debug headers/pads with actual observed behavior; update model pin mappings.",
+          "target_scope": {
+            "tags": ["debug", "inventory"],
+            "bindings": [
+              {
+                "kind": "device",
+                "name": "dut",
+                "where": { "hostname": "h" },
+                "cardinality": "one"
+              }
+            ]
+          },
+          "execution_mode": "once",
+          "execution_binding": "",
+          "steps": [
+            {
+              "title": "Reconcile inventory with observations",
+              "description": "Ensure peripherals in the model match what was observed; rename Unknown peripherals where appropriate.",
+              "tool": "wintermute",
+              "action": "model-update",
+              "confidence": 70,
+              "arguments": [],
+              "vulnOutput": null,
+              "fixOutput": null
+            }
+          ],
+          "executed": false
+        }
+      ],
+      "test_plans": []
+    },
+
+    {
+      "code": "TP-HW-BUSES",
+      "name": "Board Bus Focus Plan",
+      "description": "I2C/SPI/other buses identification and census; evidence capture for connected components.",
+      "test_cases": [
+        {
+          "code": "IOT-HW-BUS-001",
+          "name": "Bus traffic capture & classification",
+          "description": "Capture representative bus activity and classify likely device roles (sensors, flash, radios).",
+          "target_scope": {
+            "tags": ["bus", "traffic"],
+            "bindings": [
+              {
+                "kind": "device",
+                "name": "dut",
+                "where": { "hostname": "h" },
+                "cardinality": "one"
+              }
+            ]
+          },
+          "execution_mode": "once",
+          "execution_binding": "",
+          "steps": [
+            {
+              "title": "Capture representative activity",
+              "description": "Collect non-invasive traces during boot and steady state where possible; store artifacts for later review.",
+              "tool": "logic-analyzer",
+              "action": "collect",
+              "confidence": 50,
+              "arguments": ["boot_window", "steady_state"],
+              "vulnOutput": null,
+              "fixOutput": null
+            }
+          ],
+          "executed": false
+        }
+      ],
+      "test_plans": []
+    },
+
+    {
+      "code": "TP-HW-STORAGE",
+      "name": "Storage and Firmware Focus Plan",
+      "description": "Firmware acquisition planning, integrity evidence, and storage posture documentation.",
+      "test_cases": [
+        {
+          "code": "IOT-HW-STOR-001",
+          "name": "Removable media & external interfaces review",
+          "description": "Check for removable storage (SD, USB mass storage, exposed headers) and record posture.",
+          "target_scope": {
+            "tags": ["storage", "removable"],
+            "bindings": [
+              {
+                "kind": "device",
+                "name": "dut",
+                "where": { "hostname": "h" },
+                "cardinality": "one"
+              }
+            ]
+          },
+          "execution_mode": "once",
+          "execution_binding": "",
+          "steps": [
+            {
+              "title": "Document removable/external storage options",
+              "description": "Record what is present and what evidence indicates its role in boot or updates.",
+              "tool": "visual-inspection",
+              "action": "document",
+              "confidence": 60,
+              "arguments": [],
+              "vulnOutput": null,
+              "fixOutput": null
+            }
+          ],
+          "executed": false
+        }
+      ],
+      "test_plans": []
+    },
+
+    {
+      "code": "TP-HW-TPM",
+      "name": "TPM 2.0 Focus Plan",
+      "description": "TPM presence, posture, and evidence collection without altering state.",
+      "test_cases": [
+        {
+          "code": "IOT-HW-TPM-003",
+          "name": "TPM operational evidence capture",
+          "description": "Capture high-level evidence of TPM usage (logs/config signals) to support posture assessment.",
+          "target_scope": {
+            "tags": ["tpm", "evidence"],
+            "bindings": [
+              {
+                "kind": "device",
+                "name": "dut",
+                "where": { "hostname": "h" },
+                "cardinality": "one"
+              },
+              {
+                "kind": "peripheral",
+                "name": "tpm",
+                "where": { "device": "dut", "pType": "TPM" },
+                "cardinality": "many"
+              }
+            ]
+          },
+          "execution_mode": "per_binding",
+          "execution_binding": "tpm",
+          "steps": [
+            {
+              "title": "Collect TPM-related logs/config",
+              "description": "If accessible legitimately, collect OS/firmware logs/config that demonstrate whether attestation/measured boot/sealing is used.",
+              "tool": "manual",
+              "action": "collect",
+              "confidence": 40,
+              "arguments": [],
+              "vulnOutput": null,
+              "fixOutput": null
+            }
+          ],
+          "executed": false
+        }
+      ],
+      "test_plans": []
+    }
+  ]
+}

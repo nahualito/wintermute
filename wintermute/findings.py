@@ -26,6 +26,8 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Sequence
 
 from .basemodels import BaseModel
@@ -81,10 +83,9 @@ class ReproductionStep(BaseModel):
         self.tool = tool
         self.action = action
         self.confidence = confidence
-        self.arguments: Sequence[str] = arguments or []
+        self.arguments = list(arguments) if arguments is not None else []
         self.vulnOutput = vulnOutput
         self.fixOutput = fixOutput
-        pass
 
 
 class Risk(BaseModel):
@@ -122,34 +123,12 @@ class Vulnerability(BaseModel):
 
     This class holds a vulnerability found during the operation, it can contain
     reproduction steps and a risk object.
-
-    Examples:
-        >>> import core
-        >>> v = core.Vulnerability(
-        ...     title="CVE-2020-1234", description="Example vuln", cvss=7
-        ... )
-        >>> print(v.title)
-        CVE-2020-1234
-        >>> print(v.cvss)
-        7
-        >>> v.setRisk(likelihood="High", impact="High", severity="Critical")
-        >>> print(v.risk.severity)
-        Critical
-
-    Attributes:
-        * title (str): Title of the vulnerability
-        * description (str): Description of the vulnerability
-        * threat (str): Threat posed by the vulnerability
-        * cvss (int): CVSS score of the vulnerability
-        * mitigation (bool): Whether there is a mitigation available
-        * fix (bool): Whether there is a fix available
-        * fix_desc (str): Description of the fix
-        * mitigation_desc (str): Description of the mitigation
-        * risk (Risk): Risk object associated with the vulnerability
-        * verified (bool): Whether the vulnerability has been verified
-        * reproduction_steps (array): Array of ReproductionStep objects detailing how to reproduce the vuln
-
     """
+
+    vuln_id: str
+    code: str
+    discovered_at: datetime
+    verified_at: datetime | None
 
     __schema__ = {
         "risk": Risk,
@@ -169,7 +148,16 @@ class Vulnerability(BaseModel):
         risk: Dict[Any, Any] | Risk = {},
         verified: bool = False,
         reproduction_steps: list[ReproductionStep] | None = None,
+        *,
+        vuln_id: str | None = None,
+        code: str = "",
+        discovered_at: datetime | None = None,
+        verified_at: datetime | None = None,
     ) -> None:
+        self.vuln_id = vuln_id or str(uuid.uuid4())
+        self.code = code
+        self.discovered_at = discovered_at or datetime.now(timezone.utc)
+        self.verified_at = verified_at
         self.title = title
         self.description = description
         self.threat = threat
@@ -179,6 +167,8 @@ class Vulnerability(BaseModel):
         self.mitigation_desc = mitigation_desc
         self.fix_desc = fix_desc
         self.verified = verified  # If exploited or high confidence this will be true
+        if self.verified and self.verified_at is None:
+            self.verified_at = datetime.now(timezone.utc)
         self.reproduction_steps = reproduction_steps or []
 
         if isinstance(risk, Risk):
