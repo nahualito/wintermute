@@ -7,19 +7,19 @@
       "code": "IOT-HW-GEN-001",
       "name": "Engagement safety & handling constraints",
       "description": "Confirm constraints (no destructive tests unless approved), ESD handling, power limits, and evidence handling.",
+      "execution_mode": "per_device",
+      "execution_binding": "",
       "target_scope": {
         "tags": ["hardware", "blackbox", "safety"],
         "bindings": [
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
-            "cardinality": "one"
+            "cardinality": "many",
+            "where": {}
           }
         ]
       },
-      "execution_mode": "once",
-      "execution_binding": "",
       "steps": [
         {
           "title": "Confirm scope and constraints",
@@ -55,12 +55,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
-            "cardinality": "one"
+            "where": {},
+            "cardinality": "many"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -97,8 +97,8 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
-            "cardinality": "one"
+            "where": {},
+            "cardinality": "many"
           },
           {
             "kind": "peripheral",
@@ -108,7 +108,7 @@
           }
         ]
       },
-      "execution_mode": "per_binding",
+      "execution_mode": "per_device",
       "execution_binding": "unk",
       "steps": [
         {
@@ -144,8 +144,6 @@
       ],
       "executed": false
     },
-
-    // ---------------- UART ----------------
     {
       "code": "IOT-HW-UART-001",
       "name": "UART discovery & console exposure",
@@ -156,7 +154,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -203,7 +201,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -240,8 +238,47 @@
       ],
       "executed": false
     },
-
-    // ---------------- JTAG / SWD ----------------
+    {
+      "code": "IOT-UART-003",
+      "name": "UART access control / auth check",
+      "description": "Determine whether console grants privileged shell/bootloader access without authentication; check for password prompts, hidden menus, or recovery modes.",
+      "execution_mode": "per_binding",
+      "execution_binding": "uart",
+      "target_scope": {
+        "tags": ["uart", "security"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "uart",
+            "cardinality": "many",
+            "where": {
+              "pType": "UART"
+            }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Interrupt boot",
+          "description": "Attempt to interrupt bootloader (e.g., U-Boot) via keypress. Note if access is granted.",
+          "tool": "serial-console",
+          "action": "interact",
+          "confidence": 5,
+          "arguments": ["send=space", "send=anykey"]
+        },
+        {
+          "title": "Enumerate commands / menus",
+          "description": "If U-Boot present, enumerate help/printenv and look for dangerous commands.",
+          "tool": "depthcharge",
+          "action": "inspect",
+          "confidence": 7,
+          "arguments": [
+            "commands(detailed=True)",
+            "export=command_catalog.json"
+          ]
+        }
+      ]
+    },
     {
       "code": "IOT-HW-JTAG-001",
       "name": "JTAG presence & boundary discovery",
@@ -252,7 +289,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -290,6 +327,74 @@
       "executed": false
     },
     {
+      "code": "HW-JTAG-002",
+      "name": "JTAG/SWD presence + pinout confirmation",
+      "description": "Confirm JTAG/SWD electrical presence, map pins (TCK/TMS/TDI/TDO, nTRST, Vref, GND). Use JTAGulator and/or continuity checks.",
+      "execution_mode": "per_binding",
+      "execution_binding": "jtag",
+      "target_scope": {
+        "tags": ["jtag", "discovery"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "jtag",
+            "cardinality": "many",
+            "where": {
+              "pType": "JTAG"
+            }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Confirm Vref/GND and continuity",
+          "description": "Verify Vref and stable ground; ensure proper level shifting if needed (1.8V/3.3V).",
+          "tool": "multimeter",
+          "action": "measure",
+          "confidence": 7,
+          "arguments": []
+        },
+        {
+          "title": "Scan for TAP",
+          "description": "Use OpenOCD/J-Link to scan for TAPs/IR length; record IDCODEs.",
+          "tool": "openocd/jlink",
+          "action": "jtag-scan",
+          "confidence": 6,
+          "arguments": ["scan_chain", "jlink", "interface=jtag"]
+        }
+      ]
+    },
+    {
+      "code": "HW-JTAG-003",
+      "name": "JTAG security posture (lockout / readout)",
+      "description": "Check if JTAG is locked/disabled in production mode; attempt non-destructive identification reads; note if memory readout is possible.",
+      "execution_mode": "per_binding",
+      "execution_binding": "jtag",
+      "target_scope": {
+        "tags": ["jtag", "security"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "jtag",
+            "cardinality": "many",
+            "where": {
+              "pType": "JTAG"
+            }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Attempt safe reads",
+          "description": "Attempt device ID read, boundary scan, and limited memory map reads (non-destructive).",
+          "tool": "openocd",
+          "action": "read-id-and-mem",
+          "confidence": 5,
+          "arguments": ["idcode", "read_memory 0x0 0x100"]
+        }
+      ]
+    },
+    {
       "code": "IOT-HW-SWD-001",
       "name": "SWD presence & debug access check",
       "description": "Determine whether SWD is present and reachable; document pinout and whether the target responds.",
@@ -299,7 +404,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -336,8 +441,6 @@
       ],
       "executed": false
     },
-
-    // ---------------- I2C / SPI ----------------
     {
       "code": "IOT-HW-I2C-001",
       "name": "I2C bus identification & address census",
@@ -348,7 +451,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -386,54 +489,81 @@
       "executed": false
     },
     {
-      "code": "IOT-HW-SPI-001",
-      "name": "SPI bus identification & chip-select mapping",
-      "description": "Identify SPI buses and chip selects; determine if traffic indicates external flash, sensors, radios, or secure elements.",
+      "code": "IOT-SPI-001",
+      "name": "SPI flash discovery + bus capture",
+      "description": "Identify SPI flash traffic, confirm pinout (CS/CLK/MOSI/MISO), and capture boot reads using Saleae. Targets SPI MGMT SW0/SW1 and any labeled SPI pads.",
+      "execution_mode": "per_binding",
+      "execution_binding": "spi",
       "target_scope": {
-        "tags": ["spi", "bus"],
+        "tags": ["spi", "discovery"],
         "bindings": [
-          {
-            "kind": "device",
-            "name": "dut",
-            "where": { "hostname": "h" },
-            "cardinality": "one"
-          },
           {
             "kind": "peripheral",
             "name": "spi",
-            "where": { "device": "dut", "pType": "SPI" },
-            "cardinality": "many"
+            "cardinality": "many",
+            "where": {
+              "pType": "SPI"
+            }
           }
         ]
       },
-      "execution_mode": "per_binding",
-      "execution_binding": "spi",
       "steps": [
         {
-          "title": "Validate CLK/MOSI/MISO/CS candidates",
-          "description": "Confirm likely SPI pins and identify chip select lines by activity patterns.",
-          "tool": "logic-analyzer",
-          "action": "characterize",
-          "confidence": 60,
-          "arguments": [],
-          "vulnOutput": null,
-          "fixOutput": null
+          "title": "Capture boot SPI transactions",
+          "description": "Logic analyzer capture during reset/boot; decode SPI; identify flash opcodes (0x03,0x0B,0x9F, etc.).",
+          "tool": "saleae",
+          "action": "capture-spi",
+          "confidence": 6,
+          "arguments": ["--decode=spi", "--duration=30s"]
         },
         {
-          "title": "Classify peripheral types",
-          "description": "Correlate bus activity with suspected components (flash, radio, sensor) and document evidence.",
-          "tool": "manual",
-          "action": "analyze",
-          "confidence": 50,
-          "arguments": [],
-          "vulnOutput": null,
-          "fixOutput": null
+          "title": "Identify flash chip + size",
+          "description": "Read chip marking; confirm via JEDEC ID if possible.",
+          "tool": "datasheet/flashrom",
+          "action": "identify",
+          "confidence": 6,
+          "arguments": ["read-jedec-id"]
         }
-      ],
-      "executed": false
+      ]
     },
-
-    // ---------------- TPM 2.0 ----------------
+    {
+      "code": "IOT-SPI-002",
+      "name": "SPI flash readout (non-destructive)",
+      "description": "Attempt safe, read-only dump of SPI NOR. For MX25L51245-GM1 (Macronix) expect 512Mbit class; use clip/programmer or Bus Pirate where appropriate.",
+      "execution_mode": "per_binding",
+      "execution_binding": "spi",
+      "target_scope": {
+        "tags": ["spi", "security", "firmware"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "spi",
+            "cardinality": "many",
+            "where": {
+              "pType": "SPI"
+            }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Read flash (external programmer)",
+          "description": "Use CH341A/Bus Pirate/flashrom with SOIC clip where feasible. Verify hash and repeatability.",
+          "tool": "flashrom",
+          "action": "read",
+          "confidence": 6,
+          "arguments": ["-p", "ch341a_spi", "-r", "firmware.bin"]
+        },
+        {
+          "title": "Analyze dump for secrets",
+          "description": "Run binwalk/strings/entropy; look for keys, creds, TPM secrets, ME region, etc.",
+          "tool": "binwalk",
+          "action": "analyze",
+          "confidence": 6,
+          "arguments": ["-e", "firmware.bin"]
+        }
+      ]
+    },
     {
       "code": "IOT-HW-TPM-001",
       "name": "TPM presence & interface identification",
@@ -444,7 +574,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -491,7 +621,7 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           },
           {
@@ -518,8 +648,6 @@
       ],
       "executed": false
     },
-
-    // ---------------- Memory / Storage / Boot ----------------
     {
       "code": "IOT-HW-MEM-001",
       "name": "External flash identification & access posture",
@@ -530,12 +658,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -561,12 +689,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -602,12 +730,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -623,8 +751,6 @@
       ],
       "executed": false
     },
-
-    // ---------------- ROM/RAM/BIOS-like components ----------------
     {
       "code": "IOT-HW-CHIP-001",
       "name": "ROM/boot ROM & masked ROM indicators",
@@ -635,12 +761,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -666,12 +792,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -687,8 +813,6 @@
       ],
       "executed": false
     },
-
-    // ---------------- Power/Reset/Straps ----------------
     {
       "code": "IOT-HW-PWR-001",
       "name": "Power/reset/strap points mapping",
@@ -699,12 +823,12 @@
           {
             "kind": "device",
             "name": "dut",
-            "where": { "hostname": "h" },
+            "where": {},
             "cardinality": "one"
           }
         ]
       },
-      "execution_mode": "once",
+      "execution_mode": "per_device",
       "execution_binding": "",
       "steps": [
         {
@@ -737,7 +861,7 @@
               {
                 "kind": "device",
                 "name": "dut",
-                "where": { "hostname": "h" },
+                "where": {},
                 "cardinality": "one"
               },
               {
@@ -767,7 +891,6 @@
       ],
       "test_plans": []
     },
-
     {
       "code": "TP-HW-DEBUG",
       "name": "Debug Interfaces Focus Plan",
@@ -783,12 +906,12 @@
               {
                 "kind": "device",
                 "name": "dut",
-                "where": { "hostname": "h" },
+                "where": {},
                 "cardinality": "one"
               }
             ]
           },
-          "execution_mode": "once",
+          "execution_mode": "per_device",
           "execution_binding": "",
           "steps": [
             {
@@ -807,7 +930,6 @@
       ],
       "test_plans": []
     },
-
     {
       "code": "TP-HW-BUSES",
       "name": "Board Bus Focus Plan",
@@ -823,12 +945,12 @@
               {
                 "kind": "device",
                 "name": "dut",
-                "where": { "hostname": "h" },
+                "where": {},
                 "cardinality": "one"
               }
             ]
           },
-          "execution_mode": "once",
+          "execution_mode": "per_device",
           "execution_binding": "",
           "steps": [
             {
@@ -847,7 +969,6 @@
       ],
       "test_plans": []
     },
-
     {
       "code": "TP-HW-STORAGE",
       "name": "Storage and Firmware Focus Plan",
@@ -863,12 +984,12 @@
               {
                 "kind": "device",
                 "name": "dut",
-                "where": { "hostname": "h" },
+                "where": {},
                 "cardinality": "one"
               }
             ]
           },
-          "execution_mode": "once",
+          "execution_mode": "per_device",
           "execution_binding": "",
           "steps": [
             {
@@ -903,7 +1024,7 @@
               {
                 "kind": "device",
                 "name": "dut",
-                "where": { "hostname": "h" },
+                "where": {},
                 "cardinality": "one"
               },
               {
