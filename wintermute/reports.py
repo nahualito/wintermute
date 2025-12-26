@@ -168,13 +168,19 @@ class ReportMeta(type):
             *,
             include_summary: bool = True,
         ) -> None:
-            # Render and write atomically via backend.save for efficiency where available
             backend = _require_backend(c_)
             backend.begin(spec)
             if include_summary and spec.summary:
                 backend.add_summary(spec.summary)
-            for vuln, ctx in collect_vulnerabilities(objects):
-                backend.add_vulnerability(vuln, context_path=ctx)
+
+            # FIX: Add logic to switch based on report_type
+            if spec.report_type == ReportType.TEST_PLAN:
+                for run, tc, ctx in collect_test_runs(objects):
+                    backend.add_test_run(run, tc, context_path=ctx)
+            else:
+                for vuln, ctx in collect_vulnerabilities(objects):
+                    backend.add_vulnerability(vuln, context_path=ctx)
+
             backend.save(path)
 
         # Attach as classmethods

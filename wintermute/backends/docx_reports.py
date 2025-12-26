@@ -182,7 +182,7 @@ class DocxTplPerVulnBackend(ReportBackend):
         # Helper to convert TestCaseRun to dict for docxtpl
         d = run.to_dict()
         d["context_path"] = context_path or ""
-        safe: Dict[str, Any] = cast(Dict[str, Any], json.loads(json.dumps(d)))
+        safe = _run_to_context(run, test_case, context_path)
         self._run_contexts.append(safe)
 
     def add_vulnerability(
