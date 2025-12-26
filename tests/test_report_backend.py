@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from wintermute.basemodels import CloudAccount, Peripheral
+from wintermute.core import TestCase, TestCaseRun
 from wintermute.findings import ReproductionStep, Risk, Vulnerability
 from wintermute.reports import (
     RenderedReport,
@@ -63,6 +64,15 @@ class _FakeBackend(ReportBackend):
         self, vuln: Vulnerability, *, context_path: Optional[str] = None
     ) -> None:
         self.vulns.append((vuln, context_path))
+
+    def add_test_run(
+        self,
+        test_run: TestCaseRun,
+        test_case: TestCase | None = None,
+        *,
+        context_path: Optional[str] = None,
+    ) -> None:
+        pass  # Not needed for this fake backend
 
     def finalize(self) -> bytes:
         self.finalized = True

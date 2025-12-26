@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum, auto
 from typing import (
     Any,
     ClassVar,
@@ -42,6 +43,7 @@ from typing import (
 )
 
 from .basemodels import BaseModel
+from .core import TestCase, TestCaseRun
 from .findings import Vulnerability
 
 # ---------- Backend protocol ----------
@@ -53,6 +55,13 @@ class ReportBackend(Protocol):
     def add_vulnerability(
         self, vuln: Vulnerability, *, context_path: Optional[str] = None
     ) -> None: ...
+    def add_test_run(
+        self,
+        run: TestCaseRun,
+        test_case: Optional[TestCase] = None,
+        *,
+        context_path: Optional[str] = None,
+    ) -> None: ...
     def finalize(self) -> bytes: ...
     def save(self, path: str) -> None: ...
 
@@ -60,9 +69,15 @@ class ReportBackend(Protocol):
 # ---------- Report data models ----------
 
 
+class ReportType(Enum):
+    VULNERABILITY = auto()
+    TEST_PLAN = auto()
+
+
 @dataclass
 class ReportSpec(BaseModel):
     title: str
+    report_type: ReportType = ReportType.VULNERABILITY
     author: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     summary: str = ""
@@ -133,9 +148,13 @@ class ReportMeta(type):
             if include_summary and spec.summary:
                 backend.add_summary(spec.summary)
 
-            # Collect and emit vulnerabilities
-            for vuln, ctx in collect_vulnerabilities(objects):
-                backend.add_vulnerability(vuln, context_path=ctx)
+            if spec.report_type == ReportType.TEST_PLAN:
+                # FIX: Unpack 3 values instead of 2
+                for run, tc, ctx in collect_test_runs(objects):
+                    backend.add_test_run(run, tc, context_path=ctx)
+            else:
+                for vuln, ctx in collect_vulnerabilities(objects):
+                    backend.add_vulnerability(vuln, context_path=ctx)
 
             doc = backend.finalize()
             return RenderedReport(spec=spec, bytes_=doc)
@@ -359,3 +378,43 @@ def collect_vulnerabilities(
         name = getattr(obj, "name", None)
         label = f"{cls_name}[name={name}]" if isinstance(name, str) else cls_name
         yield from _walk(obj, label)
+
+
+def collect_test_runs(
+    objects: Iterable[Any],
+) -> Iterable[Tuple[TestCaseRun, Optional[TestCase], str]]:
+    """
+    Yields (TestCaseRun, TestCase, context_path).
+    We look for an Operation/Pentest to resolve the TestCase definition.
+    """
+    seen: Set[int] = set()
+
+    # Pre-calculate a lookup map if the object is an Operation
+    tc_lookup: Dict[str, TestCase] = {}
+    for obj in objects:
+        if hasattr(obj, "iterTestCases"):
+            tc_lookup.update({tc.code: tc for tc in obj.iterTestCases()})
+
+    def _walk(
+        node: Any, path: str
+    ) -> Iterator[Tuple[TestCaseRun, Optional[TestCase], str]]:
+        oid = id(node)
+        if oid in seen:
+            return
+        seen.add(oid)
+
+        if isinstance(node, TestCaseRun):
+            parent_tc = tc_lookup.get(node.test_case_code)
+            yield (node, parent_tc, path)
+            return
+        if isinstance(node, (list, tuple)):
+            for i, item in enumerate(node):
+                yield from _walk(item, f"{path}[{i}]")
+        elif hasattr(node, "__dict__"):
+            # Check for attributes that hold test execution data
+            for attr in ["test_runs", "test_plans"]:
+                if hasattr(node, attr):
+                    yield from _walk(getattr(node, attr), f"{path}.{attr}")
+
+    for obj in objects:
+        yield from _walk(obj, obj.__class__.__name__)

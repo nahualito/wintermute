@@ -38,8 +38,9 @@ from docxcompose.composer import Composer  # type: ignore[import-untyped]
 # Runtime imports (untyped libs)
 from docxtpl import DocxTemplate  # type: ignore[import-untyped]
 
+from ..core import TestCase, TestCaseRun
 from ..findings import Vulnerability
-from ..reports import ReportBackend, ReportSpec
+from ..reports import ReportBackend, ReportSpec, ReportType
 
 # --- Type alias for python-docx Document ---
 if TYPE_CHECKING:
@@ -57,6 +58,34 @@ def _vuln_to_context(v: Vulnerability, context_path: Optional[str]) -> Dict[str,
     d["context_path"] = context_path or ""
     safe: Dict[str, Any] = cast(Dict[str, Any], json.loads(json.dumps(d)))
     return safe
+
+
+def _run_to_context(
+    run: TestCaseRun, test_case: Optional[TestCase], context_path: Optional[str]
+) -> Dict[str, Any]:
+    """Merge execution data with test case definitions for the template."""
+    # Start with the execution data (status, started_at, etc.)
+    ctx = run.to_dict()
+
+    # Inject static Test Case data if available
+    if test_case:
+        ctx["test_case"] = {
+            "name": test_case.name,
+            "description": test_case.description,
+            "execution_mode": test_case.execution_mode.name,
+            "steps": [
+                step.to_dict() for step in test_case.steps
+            ],  # Includes tool and action
+        }
+    else:
+        ctx["test_case"] = {
+            "name": "Unknown",
+            "description": "No definition found",
+            "steps": [],
+        }
+
+    ctx["context_path"] = context_path or ""
+    return cast(Dict[str, Any], json.loads(json.dumps(ctx)))
 
 
 @dataclass
@@ -121,22 +150,40 @@ class DocxTplPerVulnBackend(ReportBackend):
     template_dir: str
     main_template: str = "report_main.docx"
     vuln_template: str = "report_vuln.docx"
+    test_run_template: str = "report_test_run.docx"
 
     _spec: Optional[ReportSpec] = None
     _summary: str = ""
     _vuln_contexts: List[Dict[str, Any]] = None  # type: ignore[assignment]
+    _run_contexts: List[Dict[str, Any]] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self._vuln_contexts is None:
             self._vuln_contexts = []
+        if self._run_contexts is None:
+            self._run_contexts = []
 
     def begin(self, spec: ReportSpec) -> None:
         self._spec = spec
         self._summary = spec.summary or ""
         self._vuln_contexts = []
+        self._run_contexts = []
 
     def add_summary(self, text: str) -> None:
         self._summary = text
+
+    def add_test_run(
+        self,
+        run: TestCaseRun,
+        test_case: Optional[TestCase] = None,
+        *,
+        context_path: Optional[str] = None,
+    ) -> None:
+        # Helper to convert TestCaseRun to dict for docxtpl
+        d = run.to_dict()
+        d["context_path"] = context_path or ""
+        safe: Dict[str, Any] = cast(Dict[str, Any], json.loads(json.dumps(d)))
+        self._run_contexts.append(safe)
 
     def add_vulnerability(
         self, vuln: Vulnerability, *, context_path: Optional[str] = None
@@ -163,25 +210,40 @@ class DocxTplPerVulnBackend(ReportBackend):
         doc: DocxDocument = _DocxDocumentFactory(bio)
         return doc
 
-    def _render_vuln_docs(self) -> List[DocxDocument]:
+    def _render_content_docs(self) -> List[DocxDocument]:
         tdir = Path(self.template_dir)
         results: List[DocxDocument] = []
-        for ctx in self._vuln_contexts:
-            tpl = DocxTemplate(str(tdir / self.vuln_template))
-            tpl.render(ctx)
-            bio = BytesIO()
-            tpl.save(bio)
-            bio.seek(0)
-            doc: DocxDocument = _DocxDocumentFactory(bio)
-            results.append(doc)
+
+        # Render whichever list has content based on the spec type
+        if self._spec and self._spec.report_type == ReportType.VULNERABILITY:
+            for ctx in self._vuln_contexts:
+                results.append(
+                    self._render_single_template(tdir / self.vuln_template, ctx)
+                )
+
+        elif self._spec and self._spec.report_type == ReportType.TEST_PLAN:
+            for ctx in self._run_contexts:
+                results.append(
+                    self._render_single_template(tdir / self.test_run_template, ctx)
+                )
+
         return results
+
+    def _render_single_template(
+        self, tpl_path: Path, context: Dict[str, Any]
+    ) -> DocxDocument:
+        tpl = DocxTemplate(str(tpl_path))
+        tpl.render(context)
+        bio = BytesIO()
+        tpl.save(bio)
+        bio.seek(0)
+        return _DocxDocumentFactory(bio)
 
     def _compose(self) -> DocxDocument:
         base = self._render_main()
         comp = Composer(base)
-        for d in self._render_vuln_docs():
+        for d in self._render_content_docs():
             comp.append(d)
-        # Composer mutates `base`, so returning base is correct.
         return base
 
     # --- public API ---
