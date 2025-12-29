@@ -45,6 +45,7 @@ from tinydb import TinyDB
 
 from .basemodels import BaseModel, CloudAccount, Peripheral, PeripheralType
 from .findings import ReproductionStep, Vulnerability
+from .hardware import Architecture, Memory, Processor
 
 __all__ = [
     "Device",
@@ -171,7 +172,7 @@ class Device(BaseModel):
         * operatingsystem (str): Operating System (ENUM based on a dictionary)
         * fqdn (str): Fully Qualified Domain name
         * architecture (str): Architecture of the machine (x86, x64, ARM, etc)
-        * chipset (str): Chipset of the machine (Maxis, ARM7, Cortex, etc)
+        * processor (str): Processor of the machine (Maxis, ARM7, Cortex, etc)
         * services (array): Array of Service objects holding the open services on the machine.
         * peripherals (array): Array of Peripheral objects connected to the machine.
     """
@@ -179,6 +180,9 @@ class Device(BaseModel):
     __schema__ = {
         "services": Service,
         "peripherals": Peripheral,
+        "processor": Processor,
+        "architecture": Architecture,
+        "memory": Memory,
     }
 
     def __init__(
@@ -191,8 +195,9 @@ class Device(BaseModel):
         macaddr: str = "",
         operatingsystem: str = "",
         fqdn: str = "",
-        architecture: str = "",
-        chipset: str = "",
+        architecture: Architecture | None = None,
+        processor: Processor | None = None,
+        memory: Memory | None = None,
         services: list[Service] | list[dict[str, Any]] | None = None,
         peripherals: list[Peripheral] | list[dict[str, Any]] | None = None,
     ) -> None:
@@ -205,7 +210,8 @@ class Device(BaseModel):
         self.operatingsystem = operatingsystem
         self.fqdn = fqdn
         self.architecture = architecture
-        self.chipset = chipset
+        self.processor = processor
+        self.memory = memory
         self.services: list[Service] = []
         self.peripherals: list[Peripheral] = []
 
@@ -617,6 +623,7 @@ class TargetScope(BaseModel):
 class TestCase(BaseModel):
     """Declarative test case: scope selectors + reproduction steps."""
 
+    __test__ = False
     __schema__ = {"target_scope": TargetScope, "steps": ReproductionStep}
     __enums__ = {"execution_mode": ExecutionMode}
 
@@ -690,6 +697,7 @@ class BoundObjectRef(BaseModel):
 
 
 class TestCaseRun(BaseModel):
+    __test__ = False
     __schema__ = {"bound": BoundObjectRef, "findings": Vulnerability}
     __enums__ = {"status": RunStatus}
 
@@ -785,6 +793,8 @@ class Operation(BaseModel):
         "devices": Device,
         "users": User,
         "awsaccounts": AWSAccount,
+        "test_plans": TestPlan,
+        "test_runs": TestCaseRun,
     }
 
     def __init__(

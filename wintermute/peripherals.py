@@ -258,6 +258,26 @@ class Bluetooth(Peripheral):
         super().__init__(name, pins, pType)
 
 
+class USB(Peripheral):
+    """Class that defines the USB interface"""
+
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.USB,
+        version: str = "2.0",
+        speed: str = "480Mbps",
+        role: str = "host",
+    ) -> None:
+        self.pType = pType
+        self.version = version
+        self.speed = speed
+        self.role = role
+
+        super().__init__(name, pins, pType)
+
+
 class TPM_register(Enum):
     TPM_ACCESS = 0x0000
     TPM_STS = 0x0001

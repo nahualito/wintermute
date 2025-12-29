@@ -206,6 +206,10 @@ class BaseModel:
                         )
 
                     subcls = resolved
+                if val is None:
+                    normalized[key] = None
+                    continue
+
                 if isinstance(val, list):
                     out_list: list[Any] = []
                     for v in val:
@@ -300,6 +304,7 @@ class PeripheralType(Enum):
     I2C = 0x08
     SPI = 0x09
     TPM = 0x0A
+    USB = 0x0B
 
 
 class Peripheral(BaseModel):
@@ -393,3 +398,7 @@ class CloudAccount(BaseModel):
                     raise TypeError(
                         f"Unexpected type in vulnerabilities list: {type(v)}"
                     )
+
+
+# Fixes
+from .findings import Vulnerability  # noqa: E402
