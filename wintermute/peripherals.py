@@ -297,7 +297,8 @@ class PCIe(Peripheral):
         version: str = "4.0",
         lanes: int = 1,
         role: str = "endpoint",  # GPU, Co-Processor, Network Card, etc.
-        processor: Processor | None = None, # CPU or SoC connected via PCIe or in the PCIe device
+        processor: Processor
+        | None = None,  # CPU or SoC connected via PCIe or in the PCIe device
         architecture: Architecture | None = None,
         memory: Memory | None = None,
     ) -> None:
