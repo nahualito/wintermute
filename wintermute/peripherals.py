@@ -39,6 +39,7 @@ from enum import Enum
 from typing import Any, Dict
 
 from .basemodels import Peripheral, PeripheralType
+from .hardware import Architecture, Memory, Processor
 
 log = logging.getLogger(__name__)
 
@@ -274,6 +275,39 @@ class USB(Peripheral):
         self.version = version
         self.speed = speed
         self.role = role
+
+        super().__init__(name, pins, pType)
+
+
+class PCIe(Peripheral):
+    """Class that defines the PCIe interface"""
+
+    __schema__ = {
+        "Processor": Processor,
+        "Architecture": Architecture,
+        "Memory": Memory,
+    }
+    __enums__ = {}
+
+    def __init__(
+        self,
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.PCIe,
+        version: str = "4.0",
+        lanes: int = 1,
+        role: str = "endpoint",  # GPU, Co-Processor, Network Card, etc.
+        processor: Processor | None = None, # CPU or SoC connected via PCIe or in the PCIe device
+        architecture: Architecture | None = None,
+        memory: Memory | None = None,
+    ) -> None:
+        self.pType = pType
+        self.version = version
+        self.lanes = lanes
+        self.role = role
+        self.processor = processor
+        self.architecture = architecture
+        self.memory = memory
 
         super().__init__(name, pins, pType)
 
