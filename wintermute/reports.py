@@ -62,7 +62,7 @@ class ReportBackend(Protocol):
         *,
         context_path: Optional[str] = None,
     ) -> None: ...
-    def finalize(self) -> bytes: ...
+    def finalize(self) -> Any: ...
     def save(self, path: str) -> None: ...
 
 
@@ -81,6 +81,7 @@ class ReportSpec(BaseModel):
     author: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     summary: str = ""
+    options: Dict[str, Any] = field(default_factory=dict)
 
     __schema__ = {}
     __enums__ = {}
@@ -91,7 +92,7 @@ class RenderedReport(BaseModel):
     """Convenience wrapper for render results."""
 
     spec: ReportSpec
-    bytes_: bytes
+    result: Any
 
     __schema__ = {"spec": ReportSpec}
     __enums__ = {}
@@ -156,15 +157,15 @@ class ReportMeta(type):
                 for vuln, ctx in collect_vulnerabilities(objects):
                     backend.add_vulnerability(vuln, context_path=ctx)
 
-            doc = backend.finalize()
-            return RenderedReport(spec=spec, bytes_=doc)
+            output = backend.finalize()
+            return RenderedReport(spec=spec, result=output)
 
         def save(
             c_: type["Report"],
             /,
             spec: ReportSpec,
             objects: Iterable[Any],
-            path: str,
+            target: str,
             *,
             include_summary: bool = True,
         ) -> None:
@@ -181,7 +182,7 @@ class ReportMeta(type):
                 for vuln, ctx in collect_vulnerabilities(objects):
                     backend.add_vulnerability(vuln, context_path=ctx)
 
-            backend.save(path)
+            backend.save(target)
 
         # Attach as classmethods
         c.set_backend = classmethod(set_backend)  # type: ignore[assignment]

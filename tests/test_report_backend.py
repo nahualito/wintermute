@@ -140,7 +140,7 @@ def test_report_register_render_save_and_counts(tmp_path: Any) -> None:
     rendered: RenderedReport = Report.render(
         spec, [acct, periph, extra], include_summary=True
     )
-    out = rendered.bytes_.decode("utf-8")
+    out = rendered.result.decode("utf-8")
     assert out == "FAKE:3:1"  # 3 vulns, summary present
 
     out_path = tmp_path / "out.fake"
