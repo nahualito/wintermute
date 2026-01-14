@@ -36,14 +36,14 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence
 
 from tinydb import TinyDB
 
-from .basemodels import BaseModel, CloudAccount, Peripheral, PeripheralType
+from .basemodels import BaseModel, Peripheral, PeripheralType
+from .cloud.aws import AWSAccount, AWSService, AWSUser
 from .findings import ReproductionStep, Vulnerability
 from .hardware import Architecture, Memory, Processor
 
@@ -321,175 +321,6 @@ class User(BaseModel):
         if d not in self.desktops:
             self.desktops.append(d)
             log.info(f"Added desktop {hostname} to user {self.uid}")
-            return True
-        return False
-
-
-# AWS Specific Classes
-@dataclass
-class AWSUser(BaseModel):
-    username: str
-    arn: str | None = None
-    attached_policies: List[str] = field(default_factory=list)
-
-    __schema__ = {}
-    __enums__ = {}
-
-
-@dataclass
-class AWSService(BaseModel):
-    name: str
-    resources: List[str] = field(default_factory=list)
-    config: Dict[str, Any] = field(default_factory=dict)
-
-    __schema__ = {}
-    __enums__ = {}
-
-
-class AWSAccount(CloudAccount):
-    """This class represents an AWS Account that may contain users and vulnerabilities.
-
-    This class represents an AWS Account that may contain users and vulnerabilities,
-    this class was not designed to be called by itself, it should be called from
-    Operation for it's management
-
-    Examples:
-        >>> import core
-        >>> acct = AWSAccount(
-        ...     name="aws-prod",
-        ...     description="This is the prod account",
-        ...     account_id="123456789012",
-        ...     arn="arn:aws:iam::123456789012:root",
-        ...     default_region="us-east-1",
-        ...     users=[
-        ...         {"username": "alice"},
-        ...         {"username": "bob", "attached_policies": ["Admin"]},
-        ...     ],
-        ...     services=[{"name": "s3", "resources": ["bucket1", "bucket2"]}],
-        ...     vulnerabilities=[
-        ...         Vulnerability(
-        ...             title="Public S3",
-        ...             description="Bucket allows public read",
-        ...             risk=Risk(severity="High"),
-        ...         ),
-        ...     ],
-        ... )
-        >>> r.account_id
-        '123456789012'
-        >>> r.name
-        'aws-prod'
-        >>> r.description
-        'This is the prod account'
-
-    Attributes:
-        * account_id (str): AWS Account ID
-        * arn (str): AWS Account ARN
-        * partition (str): AWS partition (aws, aws-us-gov, aws-cn)
-        * default_region (str): Default AWS region for the account
-        * tags (dict): Dictionary of tags associated with the account
-        * users (list): List of AWSUser objects associated with the account
-        * services (list): List of AWSService objects associated with the account
-    """
-
-    __schema__ = {
-        "users": AWSUser,
-        "services": AWSService,
-    }
-
-    def __init__(
-        self,
-        name: str,
-        description: str = "",
-        *,
-        account_id: str | None = None,
-        arn: str | None = None,
-        partition: str = "aws",  # aws, aws-us-gov, aws-cn
-        default_region: str | None = None,
-        tags: Dict[str, str] | None = None,
-        users: Optional[List[AWSUser | Dict[str, Any]]] = None,
-        services: Optional[List[AWSService | Dict[str, Any]]] = None,
-        vulnerabilities: Optional[List[Any]] = None,
-    ) -> None:
-        # let CloudAccount handle name/description/vulnerabilities coercion
-        super().__init__(
-            name=name, description=description, vulnerabilities=vulnerabilities
-        )
-
-        self.account_id = account_id
-        self.arn = arn
-        self.partition = partition
-        self.default_region = default_region
-        self.tags = dict(tags) if tags else {}
-
-        self.users: List[AWSUser] = []
-        if users:
-            for u in users:
-                if isinstance(u, AWSUser):
-                    self.users.append(u)
-                elif isinstance(u, dict):
-                    self.users.append(AWSUser.from_dict(u))
-                else:
-                    raise TypeError(f"Unexpected type in users: {type(u)}")
-
-        self.services: List[AWSService] = []
-        if services:
-            for s in services:
-                if isinstance(s, AWSService):
-                    self.services.append(s)
-                elif isinstance(s, dict):
-                    self.services.append(AWSService.from_dict(s))
-                else:
-                    raise TypeError(f"Unexpected type in services: {type(s)}")
-
-    # Optional: convenience
-    @property
-    def provider(self) -> str:
-        return "aws"
-
-    def addVulnerability(
-        self,
-        title: str,
-        description: str,
-        threat: str = "",
-        cvss: int = 0,
-        mitigation: bool = True,
-        fix: bool = True,
-        fix_desc: str = "",
-        mitigation_desc: str = "",
-        risk: dict[str, str] | None = None,
-        verified: bool = False,
-    ) -> bool:
-        v = Vulnerability(
-            title=title,
-            description=description,
-            threat=threat,
-            cvss=cvss,
-            mitigation=mitigation,
-            fix=fix,
-            fix_desc=fix_desc,
-            mitigation_desc=mitigation_desc,
-            verified=verified,
-        )
-        if risk:
-            v.setRisk(**risk)
-        if v not in self.vulnerabilities:
-            self.vulnerabilities.append(v)
-            return True
-        return False
-
-    def addUser(
-        self,
-        username: str,
-        arn: str | None = None,
-        attached_policies: List[str] = field(default_factory=list),
-    ) -> bool:
-        u = AWSUser(
-            username=username,
-            arn=arn,
-            attached_policies=attached_policies,
-        )
-        if u not in self.users:
-            self.users.append(u)
             return True
         return False
 
