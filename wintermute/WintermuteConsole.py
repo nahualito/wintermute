@@ -21,7 +21,7 @@ import inspect
 import logging
 import sys
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from os.path import basename, dirname, isfile, join
 from typing import Any, Dict
 
@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 event_timestamp = (
-    str(datetime.utcnow()).split(".")[0].replace(" ", "_").replace(":", "-")
+    str(datetime.now(timezone.utc)).split(".")[0].replace(" ", "_").replace(":", "-")
 )
 
 # End of loggin imports
@@ -52,6 +52,8 @@ cartridges = [
 # This will hold the objects for our operation/Pentest from here we can manipulate and
 # then push into the database, easier than to constantly DB read.
 CurrentOperation = Operation()
+
+logger = logging.getLogger(__name__)
 
 
 class wintermute(cmd2.Cmd):
@@ -75,8 +77,6 @@ class wintermute(cmd2.Cmd):
             level=logging.INFO,
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-        # self.dbController = dbBackend()
-        # self.register_command_set(self.dbController)
 
         del cmd2.Cmd.do_run_pyscript
         del cmd2.Cmd.do_run_script
@@ -112,7 +112,8 @@ class wintermute(cmd2.Cmd):
                         self._loadedModules[ns.cmds] = c
                         self.poutput(f"{ns.cmds} loaded")
         except Exception as e:
-            print(e)
+            logger.error(f"Error loading cartridge {ns.cmds}: {e}")
+            print(f"Error loading cartridge {ns.cmds}: {e}")
 
     @with_argparser(load_parser)
     @with_category("Cartridge Commands")
@@ -131,7 +132,8 @@ class wintermute(cmd2.Cmd):
             del self._loadedModules[ns.cmds]
             self.poutput(f"{ns.cmds} unloaded")
         except Exception as e:
-            print(e)
+            logger.error(f"Error unloading cartridge {ns.cmds}: {e}")
+            print(f"Error unloading cartridge {ns.cmds}: {e}")
 
     def do_checkThings(self) -> None:
         pass

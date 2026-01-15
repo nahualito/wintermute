@@ -43,7 +43,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from tinydb import TinyDB
 
 from .basemodels import BaseModel, Peripheral, PeripheralType
-from .cloud.aws import AWSAccount, AWSService, AWSUser
+from .cloud.aws import AWSAccount, AWSService, AWSUser, IAMRole, IAMUser
 from .findings import ReproductionStep, Vulnerability
 from .hardware import Architecture, Memory, Processor
 
@@ -1027,8 +1027,11 @@ class Operation(BaseModel):
         default_region: str | None = None,
         tags: Dict[str, str] | None = None,
         users: Optional[List[AWSUser | Dict[str, Any]]] = None,
+        iamusers: Optional[List[IAMUser | Dict[str, Any]]] = None,
+        iamroles: Optional[List[IAMRole | Dict[str, Any]]] = None,
         services: Optional[List[AWSService | Dict[str, Any]]] = None,
         vulnerabilities: Optional[List[Any]] = None,
+        roles: Optional[List[Any]] = None,
     ) -> bool:
         """Add an AWS Account to the operation"""
         a = AWSAccount(
@@ -1040,8 +1043,11 @@ class Operation(BaseModel):
             default_region=default_region,
             tags=tags,
             users=users,
+            iamusers=iamusers,
+            iamroles=iamroles,
             services=services,
             vulnerabilities=vulnerabilities,
+            roles=roles,
         )
         if a not in self.awsaccounts:
             self.awsaccounts.append(a)

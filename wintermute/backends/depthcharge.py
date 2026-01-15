@@ -643,7 +643,7 @@ class DepthchargePeripheralAgent:
                 print("Running runner.commands(detailed=True) to get help output")
                 help_out = dc.commands(detailed=True)
             except Exception:
-                help_out = ""
+                help_out = {}  # ""
 
         parsed = _parse_commands(help_out)
         print(f"Parsed {len(parsed)} commands from help output")
