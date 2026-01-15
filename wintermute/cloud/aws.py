@@ -309,4 +309,5 @@ class AWSAccount(CloudAccount):
             name=name,
             service_type=service_type,
             config=config or {},
+            properties=properties or {},
         )
