@@ -60,6 +60,7 @@ class AWSUser(BaseModel):
     username: str
     arn: str | None = None
     attached_policies: List[str] = field(default_factory=list)
+    custom_properties: Dict[str, Any] = field(default_factory=dict)
 
     __schema__ = {}
     __enums__ = {}
@@ -71,6 +72,7 @@ class IAMUser(BaseModel):
     arn: str | None = None
     administrator: bool = False
     attached_policies: List[str] = field(default_factory=list)
+    custom_properties: Dict[str, Any] = field(default_factory=dict)
 
     __schema__ = {}
     __enums__ = {}
@@ -82,6 +84,7 @@ class IAMRole(BaseModel):
     arn: str | None = None
     administrator: bool = False
     attached_policies: List[str] = field(default_factory=list)
+    custom_properties: Dict[str, Any] = field(default_factory=dict)
 
     __schema__ = {}
     __enums__ = {}
@@ -109,7 +112,7 @@ class AWSService(BaseModel):
     name: str
     arn: str | None = None
     config: Dict[str, Any] = field(default_factory=dict)
-    properties: Dict[str, Any] = field(default_factory=dict)
+    custom_properties: Dict[str, Any] = field(default_factory=dict)
     service_type: AWSServiceType = AWSServiceType.OTHER
 
     __schema__ = {}
@@ -253,7 +256,11 @@ class AWSAccount(CloudAccount):
         return False
 
     def addUser(
-        self, username: str, arn: str | None = None, attached_policies: List[str] = []
+        self,
+        username: str,
+        arn: str | None = None,
+        attached_policies: List[str] = [],
+        custom_properties: Dict[str, Any] = {},
     ) -> bool:
         # We assume attached_policies defaults to empty list in the dataclass if None passed
         return self._add_component(
@@ -262,6 +269,7 @@ class AWSAccount(CloudAccount):
             username=username,
             arn=arn,
             attached_policies=attached_policies or [],
+            custom_properties=custom_properties or {},
         )
 
     def addIAMUser(
@@ -270,6 +278,7 @@ class AWSAccount(CloudAccount):
         arn: str | None = None,
         administrator: bool = False,
         attached_policies: List[str] = [],
+        custom_properties: Dict[str, Any] = {},
     ) -> bool:
         return self._add_component(
             self.iamusers,
@@ -278,6 +287,7 @@ class AWSAccount(CloudAccount):
             arn=arn,
             administrator=administrator,
             attached_policies=attached_policies or [],
+            custom_properties=custom_properties or {},
         )
 
     def addIAMRole(
@@ -286,6 +296,7 @@ class AWSAccount(CloudAccount):
         arn: str | None = None,
         administrator: bool = False,
         attached_policies: List[str] = [],
+        custom_properties: Dict[str, Any] = {},
     ) -> bool:
         return self._add_component(
             self.iamroles,
@@ -294,6 +305,7 @@ class AWSAccount(CloudAccount):
             arn=arn,
             administrator=administrator,
             attached_policies=attached_policies or [],
+            custom_properties=custom_properties or {},
         )
 
     def addService(
@@ -301,7 +313,7 @@ class AWSAccount(CloudAccount):
         name: str,
         service_type: AWSServiceType,
         config: Dict[str, Any] = {},
-        properties: Dict[str, Any] = {},
+        custom_properties: Dict[str, Any] = {},
     ) -> bool:
         return self._add_component(
             self.services,
@@ -309,5 +321,5 @@ class AWSAccount(CloudAccount):
             name=name,
             service_type=service_type,
             config=config or {},
-            properties=properties or {},
+            custom_properties=custom_properties or {},
         )

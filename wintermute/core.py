@@ -289,6 +289,7 @@ class User(BaseModel):
         desktops: list[Device] | None = None,
         ldap_groups: Sequence[str] | None = None,
         teams: Sequence[str] | None = None,
+        cloud_accounts: Sequence[str] | None = None,
     ) -> None:
         self.uid = uid
         self.name = name
@@ -300,6 +301,7 @@ class User(BaseModel):
         self.override_reason = override_reason
         self.desktops: list[Device] = list(desktops) if desktops else []
         self.ldap_groups: list[str] = list(ldap_groups) if ldap_groups else []
+        self.cloud_accounts: list[str] = list(cloud_accounts) if cloud_accounts else []
         self.teams: list[str] = []
         log.debug(
             f"Initializing User: {self.uid} ldap_groups: {ldap_groups} desktops: {desktops} permissions: {permissions}"
@@ -992,6 +994,9 @@ class Operation(BaseModel):
         dept: str = "",
         permissions: list[str] | None = None,
         override_reason: str = "",
+        desktops: list[Device] | None = None,
+        ldap_groups: list[str] | None = None,
+        cloud_accounts: list[str] | None = None,
     ) -> bool:
         """Add a user to the operation"""
         u = User(
@@ -1002,6 +1007,9 @@ class Operation(BaseModel):
             dept=dept,
             permissions=permissions or [],
             override_reason=override_reason,
+            desktops=desktops or [],
+            ldap_groups=ldap_groups or [],
+            cloud_accounts=cloud_accounts or [],
         )
         if u not in self.users:
             self.users.append(u)
