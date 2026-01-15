@@ -33,7 +33,7 @@ from typing import Optional
 def enable(level: int = logging.INFO, *, fmt: Optional[str] = None) -> None:
     """Attach a StreamHandler to 'mypackage' logger only (not root)."""
     fmt = fmt or "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    logger = logging.getLogger("mypackage")
+    logger = logging.getLogger("wintermute")
     # avoid stacking duplicate handlers if called twice
     if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
         handler = logging.StreamHandler()

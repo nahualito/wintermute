@@ -199,8 +199,9 @@ class DocxTplPerVulnBackend(ReportBackend):
         context: Dict[str, Any] = {
             "title": self._spec.title,
             "author": self._spec.author or "",
-            "created_at": self._spec.created_at.isoformat(),
+            "created_at": self._spec.created_at.strftime("%B %d, %Y"),
             "summary": self._summary,
+            "options": self._spec.options,
         }
         tpl.render(context)
         # Save to memory and re-open as python-docx Document for composition
@@ -242,6 +243,19 @@ class DocxTplPerVulnBackend(ReportBackend):
     def _compose(self) -> DocxDocument:
         base = self._render_main()
         comp = Composer(base)
+        header_text = None
+
+        assert self._spec is not None
+
+        if self._spec.report_type == ReportType.TEST_PLAN and self._run_contexts:
+            header_text = "Test Case Executions"
+        elif self._vuln_contexts:
+            header_text = "Vulnerabilities"
+
+        if header_text:
+            comp.doc.add_page_break()
+            comp.doc.add_heading(header_text, level=2)
+
         for d in self._render_content_docs():
             comp.append(d)
         return base
