@@ -119,6 +119,9 @@ class Service(BaseModel):
             self.vulnerabilities.append(
                 Vulnerability.from_dict(v) if isinstance(v, dict) else v
             )
+        log.info(
+            f"Created Service: {self.app} on port {self.portNumber}/{self.protocol} with {len(self.vulnerabilities)} vulnerabilities"
+        )
 
     def addVulnerability(
         self,
@@ -147,7 +150,13 @@ class Service(BaseModel):
         )
         if v not in self.vulnerabilities:
             self.vulnerabilities.append(v)
+            log.info(
+                f"Added Vulnerability {v.title} to Service {self.app} on port {self.portNumber}/{self.protocol}"
+            )
             return True
+        log.debug(
+            f"Vulnerability {v.title} already exists on Service {self.app} on port {self.portNumber}/{self.protocol}, not adding."
+        )
         return False
 
 
@@ -222,6 +231,9 @@ class Device(BaseModel):
             self.peripherals.append(
                 Peripheral.from_dict(p) if isinstance(p, dict) else p
             )
+        log.info(
+            f"Created Device: {self.hostname} ({self.ipaddr}) with {len(self.services)} services and {len(self.peripherals)} peripherals"
+        )
 
     def addService(
         self,
@@ -231,7 +243,7 @@ class Device(BaseModel):
         banner: str = "",
         transport_layer: str = "",
         vulnerabilities: list[Vulnerability] = [],
-    ) -> None:
+    ) -> bool:
         s = Service(
             protocol=protocol,
             app=app,
@@ -242,7 +254,14 @@ class Device(BaseModel):
         )
         if s not in self.services:
             self.services.append(s)
-        pass
+            log.info(
+                f"Added Service {app} on port {portNumber}/{protocol} to Device {self.hostname}"
+            )
+            return True
+        log.debug(
+            f"Service {app} on port {portNumber}/{protocol} already exists on Device {self.hostname}, not adding."
+        )
+        return False
 
 
 class User(BaseModel):
@@ -356,6 +375,9 @@ class Analyst(BaseModel):
         self.userid = userid
         #: Email address of the analyst.
         self.email = email if self.isValidEmail(email) else None
+        log.info(
+            f"Created Analyst: {self.name} with userid: {self.userid} and email: {self.email}"
+        )
 
     def isValidEmail(self, email: str) -> bool:
         """Check that the email has the correct format, we do not check the email is deliverable, left to the user.
@@ -673,18 +695,28 @@ class Operation(BaseModel):
             self.test_plans.append(
                 TestPlan.from_dict(tp) if isinstance(tp, dict) else tp
             )
+            log.debug(
+                f"Rehydrated TestPlan: {tp.code} for Operation: {self.operation_name}"
+            )
 
         self.test_runs: list[TestCaseRun] = []
         for tr in self.test_runs or []:
             self.test_runs.append(
                 TestCaseRun.from_dict(tr) if isinstance(tr, dict) else tr
             )
+            log.debug(
+                f"Rehydrated TestCaseRun: {tr.run_id} for TestCase: {tr.test_case_code}"
+            )
+        log.info(
+            f"Created Operation: {self.operation_name} with ID: {self.operation_id} having {len(self.analysts)} analysts, {len(self.devices)} devices, {len(self.users)} users, and {len(self.awsaccounts)} AWS accounts"
+        )
 
     def addTestPlan(self, plan: TestPlan | dict[str, Any]) -> bool:
         """Attach a TestPlan to this Operation. Supports multiple plans per operation."""
         tp = plan if isinstance(plan, TestPlan) else TestPlan.from_dict(plan)
         if tp not in self.test_plans:
             self.test_plans.append(tp)
+            log.info(f"Added TestPlan {tp.code} to Operation {self.operation_name}")
             return True
         return False
 
@@ -810,6 +842,7 @@ class Operation(BaseModel):
 
         if tc.execution_mode == ExecutionMode.once:
             runs.append(TestCaseRun(run_id=f"{tc.code}:1", test_case_code=tc.code))
+            log.info(f"Created 1 TestCaseRun for TestCase {tc.code} using once mode")
             return runs
 
         if tc.execution_mode == ExecutionMode.per_device:
@@ -838,6 +871,12 @@ class Operation(BaseModel):
                         ],
                     )
                 )
+                log.debug(
+                    f"Created TestCaseRun {tc.code}:dev{i} for Device {d.hostname}"
+                )
+            log.info(
+                f"Created {len(devs)} TestCaseRuns for TestCase {tc.code} using per_device mode"
+            )
             return runs
 
         if tc.execution_mode == ExecutionMode.per_binding:
@@ -873,8 +912,16 @@ class Operation(BaseModel):
                             ],
                         )
                     )
+                log.debug(
+                    f"Created TestCaseRun {tc.code}:{alias}{i} for {alias} object"
+                )
+            log.info(
+                f"Created {len(objs)} TestCaseRuns for TestCase {tc.code} using binding '{alias}'"
+            )
             return runs
-
+        log.warning(
+            f"No TestCaseRuns created for TestCase {tc.code}, unknown execution_mode {tc.execution_mode}"
+        )
         return runs
 
     def generateTestRuns(self, *, replace: bool = False) -> list[TestCaseRun]:
@@ -889,6 +936,9 @@ class Operation(BaseModel):
                     self.test_runs.append(r)
                     existing.add(r.run_id)
                     created.append(r)
+        log.info(
+            f"Generated {len(created)} new TestCaseRuns for Operation {self.operation_name}"
+        )
         return created
 
     def statusReport(self, start: datetime, end: datetime) -> dict[str, Any]:
@@ -906,6 +956,9 @@ class Operation(BaseModel):
             k = r.status.name
             by_status[k] = by_status.get(k, 0) + 1
 
+        log.info(
+            f"Generated status report for Operation {self.operation_name} from {start} to {end}: total_runs={total}, by_status={by_status}"
+        )
         return {
             "start": start.isoformat().replace("+00:00", "Z")
             if start.tzinfo
@@ -932,7 +985,13 @@ class Operation(BaseModel):
         a = Analyst(name, userid, email)
         if a not in self.analysts:
             self.analysts.append(a)
+            log.info(
+                f"Added Analyst {name} with userid {userid} to Operation {self.operation_name}"
+            )
             return True
+        log.warning(
+            f"Analyst {name} with userid {userid} already exists in Operation {self.operation_name}, not adding."
+        )
         return False
 
     def delAnalyst(self, userid: str) -> bool:
@@ -940,7 +999,13 @@ class Operation(BaseModel):
         for a in self.analysts:
             if a.userid == userid:
                 self.analysts.remove(a)
+                log.info(
+                    f"Deleted Analyst with userid {userid} from Operation {self.operation_name}"
+                )
                 return True
+        log.warning(
+            f"Analyst with userid {userid} not found in Operation {self.operation_name}, cannot delete."
+        )
         return False
 
     def getDeviceByHostname(self, hostname: str) -> Optional[Device]:
@@ -972,9 +1037,18 @@ class Operation(BaseModel):
             operatingsystem = os
 
         d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
+        log.debug(
+            f"Attempting to add Device {hostname} ({ipaddr}) to Operation {self.operation_name}"
+        )
         if d not in self.devices:
             self.devices.append(d)
+            log.info(
+                f"Added Device {hostname} ({ipaddr}) to Operation {self.operation_name}"
+            )
             return True
+        log.warning(
+            f"Device {hostname} ({ipaddr}) already exists in Operation {self.operation_name}, not adding."
+        )
         return False
 
     def delDevice(self, hostname: str) -> bool:
@@ -982,7 +1056,13 @@ class Operation(BaseModel):
         for d in self.devices:
             if d.hostname == hostname:
                 self.devices.remove(d)
+                log.info(
+                    f"Deleted Device {hostname} from Operation {self.operation_name}"
+                )
                 return True
+        log.warning(
+            f"Device {hostname} not found in Operation {self.operation_name}, cannot delete."
+        )
         return False
 
     def addUser(
@@ -1011,9 +1091,14 @@ class Operation(BaseModel):
             ldap_groups=ldap_groups or [],
             cloud_accounts=cloud_accounts or [],
         )
+        log.debug(f"Attempting to add User {uid} to Operation {self.operation_name}")
         if u not in self.users:
             self.users.append(u)
+            log.info(f"Added User {uid} to Operation {self.operation_name}")
             return True
+        log.warning(
+            f"User {uid} already exists in Operation {self.operation_name}, not adding."
+        )
         return False
 
     def delUser(self, uid: str) -> bool:
@@ -1021,7 +1106,11 @@ class Operation(BaseModel):
         for u in self.users:
             if u.uid == uid:
                 self.users.remove(u)
+                log.info(f"Deleted User {uid} from Operation {self.operation_name}")
                 return True
+        log.warning(
+            f"User {uid} not found in Operation {self.operation_name}, cannot delete."
+        )
         return False
 
     def addAWSAccount(
@@ -1057,9 +1146,16 @@ class Operation(BaseModel):
             vulnerabilities=vulnerabilities,
             roles=roles,
         )
+        log.debug(
+            f"Attempting to add AWS Account {name} to Operation {self.operation_name}"
+        )
         if a not in self.awsaccounts:
             self.awsaccounts.append(a)
+            log.info(f"Added AWS Account {name} to Operation {self.operation_name}")
             return True
+        log.warning(
+            f"AWS Account {name} already exists in Operation {self.operation_name}, not adding."
+        )
         return False
 
     def delAWSAccount(self, accountId: str) -> bool:
@@ -1067,7 +1163,13 @@ class Operation(BaseModel):
         for a in self.awsaccounts:
             if a.account_id == accountId:
                 self.awsaccounts.remove(a)
+                log.info(
+                    f"Deleted AWS Account {accountId} from Operation {self.operation_name}"
+                )
                 return True
+        log.warning(
+            f"AWS Account {accountId} not found in Operation {self.operation_name}, cannot delete."
+        )
         return False
 
     def save(self) -> None:
@@ -1076,6 +1178,7 @@ class Operation(BaseModel):
         db.drop_tables()
         db.insert(self.to_dict())
         db.close()
+        log.info(f"Saved Operation {self.operation_name} to database")
 
     def load(self) -> None:
         """Load the operation from the TinyDB database"""
@@ -1084,6 +1187,7 @@ class Operation(BaseModel):
         db.close()
         loaded = Operation.from_dict(saved)
         self.__dict__.update(loaded.__dict__)
+        log.info(f"Loaded Operation {self.operation_name} from database")
 
 
 class Pentest(Operation):
@@ -1177,6 +1281,9 @@ class Pentest(Operation):
         self.designDocs = designDocs
         self.quipId = quipId
         # self.loadPentest()
+        log.info(
+            f"Created Pentest: {self.operation_name} with ApplicationName: {self.ApplicationName} and dataClassification: {self.dataClassification}"
+        )
 
     def loadPentest(self) -> None:
         """Load the pentest from the TinyDB database"""
@@ -1185,3 +1292,4 @@ class Pentest(Operation):
         # First record, we shouldn't have more than one anyway, if so .. we shall revisit this
         print(savedData)
         self.__init__(**savedData["_default"]["1"])  # type: ignore[misc]
+        log.info(f"Loaded Pentest {self.operation_name} from database")

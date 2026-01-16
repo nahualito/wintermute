@@ -380,6 +380,7 @@ def _make_repro_step(
     """Create a ReproductionStep object for a vulnerability."""
     from wintermute.findings import ReproductionStep  # runtime import
 
+    logger.debug(f"Creating ReproductionStep: {title}")
     return ReproductionStep(
         title=title,
         description=description,
@@ -406,6 +407,7 @@ def _make_user_vuln(
     """Create a Vulnerability object for user-reported issues."""
     from wintermute.findings import Vulnerability  # runtime import
 
+    logger.debug(f"Creating Vulnerability: {title} with severity {severity}")
     v = Vulnerability(
         title=title,
         description=description,
@@ -613,6 +615,9 @@ class DepthchargePeripheralAgent:
         self.arch: Optional[str] = arch
         self.artifacts: Path = self.workspace / "artifacts"
         self.artifacts.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            f"Initialized DepthchargePeripheralAgent for device {self.device} with arch {self.arch}"
+        )
 
     def _run(self, runner: Any, cmd: str) -> str:
         fn = getattr(runner, "run_cmd", None) or getattr(runner, "run_command", None)
@@ -647,6 +652,7 @@ class DepthchargePeripheralAgent:
 
         parsed = _parse_commands(help_out)
         print(f"Parsed {len(parsed)} commands from help output")
+        logger.info(f"[Depthcharge] Parsed {len(parsed)} commands from help output")
 
         top = sorted(parsed, key=lambda r: r.danger.severity, reverse=True)[:15]
         for r in top:

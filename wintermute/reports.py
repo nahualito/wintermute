@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -46,6 +47,7 @@ from .basemodels import BaseModel
 from .core import TestCase, TestCaseRun
 from .findings import Vulnerability
 
+log = logging.getLogger(__name__)
 # ---------- Backend protocol ----------
 
 
@@ -385,6 +387,7 @@ def collect_vulnerabilities(
         name = getattr(obj, "name", None)
         label = f"{cls_name}[name={name}]" if isinstance(name, str) else cls_name
         yield from _walk(obj, label)
+    log.info(f"Collected vulnerabilities from objects: {len(seen)} nodes visited.")
 
 
 def collect_test_runs(
@@ -425,3 +428,4 @@ def collect_test_runs(
 
     for obj in objects:
         yield from _walk(obj, obj.__class__.__name__)
+    log.info(f"Collected test runs from objects: {len(seen)} nodes visited.")

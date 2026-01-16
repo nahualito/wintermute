@@ -74,6 +74,7 @@ class BurpParser:
         )
         self.file: str = ""
         self.invalid_tags: List[str] = ["p", "b", "i"]
+        log.info(f"Initialized BurpParser with output workbook {workbook}")
 
     def ttext(self, tag: Optional[Tag]) -> str:
         return tag.text if tag and tag.text is not None else ""

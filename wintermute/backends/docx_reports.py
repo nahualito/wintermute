@@ -48,6 +48,10 @@ if TYPE_CHECKING:
 else:
     DocxDocument = Any  # at runtime we don't care; library is untyped
 
+import logging
+
+log = logging.getLogger(__name__)
+
 
 def _vuln_to_context(v: Vulnerability, context_path: Optional[str]) -> Dict[str, Any]:
     """
@@ -204,11 +208,13 @@ class DocxTplPerVulnBackend(ReportBackend):
             "options": self._spec.options,
         }
         tpl.render(context)
+        log.debug("Rendered main template with context: %s", context)
         # Save to memory and re-open as python-docx Document for composition
         bio = BytesIO()
         tpl.save(bio)
         bio.seek(0)
         doc: DocxDocument = _DocxDocumentFactory(bio)
+        log.info("Main report document rendered successfully.")
         return doc
 
     def _render_content_docs(self) -> List[DocxDocument]:
@@ -258,6 +264,7 @@ class DocxTplPerVulnBackend(ReportBackend):
 
         for d in self._render_content_docs():
             comp.append(d)
+        log.info("Composed final document with all content.")
         return base
 
     # --- public API ---
@@ -266,8 +273,10 @@ class DocxTplPerVulnBackend(ReportBackend):
         doc = self._compose()  # DocxDocument (non-Optional)
         out = BytesIO()
         doc.save(out)
+        log.info("Finalized report document in memory.")
         return out.getvalue()
 
     def save(self, path: str) -> None:
         doc = self._compose()  # DocxDocument (non-Optional)
         doc.save(path)
+        log.info(f"Saved report document to {path}")

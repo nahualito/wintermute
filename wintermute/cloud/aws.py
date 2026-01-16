@@ -205,6 +205,7 @@ class AWSAccount(CloudAccount):
         self.iamusers: List[IAMUser] = _load_list(iamusers, IAMUser)
         self.iamroles: List[IAMRole] = _load_list(iamroles, IAMRole)
         self.services: List[AWSService] = _load_list(services, AWSService)
+        log.info(f"AWSAccount initialized: {self.account_id} - {self.name}")
 
     # Optional: convenience
     @property
@@ -217,11 +218,16 @@ class AWSAccount(CloudAccount):
         """
         # Create the object using the provided class and keyword arguments
         obj = cls(**kwargs)
+        log.debug(f"Created {cls.__name__} object: {obj}")
 
         # Check if it already exists (requires __eq__ or dataclass default equality)
         if obj not in target_list:
             target_list.append(obj)
+            log.debug(f"Added {cls.__name__} to AWSAccount {self.account_id}: {obj}")
             return True
+        log.info(
+            f"Did not add {cls.__name__} to AWSAccount {self.account_id}: duplicate found"
+        )
         return False
 
     def addVulnerability(
@@ -250,9 +256,18 @@ class AWSAccount(CloudAccount):
         )
         if risk:
             v.setRisk(**risk)
+            log.debug(
+                f"Set risk for Vulnerability {v.title} in AWSAccount {self.account_id}: {risk}"
+            )
         if v not in self.vulnerabilities:
             self.vulnerabilities.append(v)
+            log.info(
+                f"Vulnerability {v.title} added to AWSAccount {self.account_id}: {title}"
+            )
             return True
+        log.warning(
+            f"Vulnerability {v.title} not added to AWSAccount {self.account_id}: duplicate found"
+        )
         return False
 
     def addUser(
@@ -262,6 +277,7 @@ class AWSAccount(CloudAccount):
         attached_policies: List[str] = [],
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
+        log.info(f"Adding AWS User {username} to AWSAccount {self.account_id}")
         # We assume attached_policies defaults to empty list in the dataclass if None passed
         return self._add_component(
             self.users,
@@ -280,6 +296,7 @@ class AWSAccount(CloudAccount):
         attached_policies: List[str] = [],
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
+        log.info(f"Adding IAM User {username} to AWSAccount {self.account_id}")
         return self._add_component(
             self.iamusers,
             IAMUser,
@@ -298,6 +315,7 @@ class AWSAccount(CloudAccount):
         attached_policies: List[str] = [],
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
+        log.info(f"Adding IAM Role {role_name} to AWSAccount {self.account_id}")
         return self._add_component(
             self.iamroles,
             IAMRole,
@@ -315,6 +333,7 @@ class AWSAccount(CloudAccount):
         config: Dict[str, Any] = {},
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
+        log.info(f"Adding AWS Service {name} to AWSAccount {self.account_id}")
         return self._add_component(
             self.services,
             AWSService,

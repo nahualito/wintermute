@@ -93,6 +93,9 @@ class UART(Peripheral):
         )
 
         super().__init__(name, pins, pType)
+        log.info(
+            f"Initialized UART peripheral {name} on port {comPort} with baudrate {baudrate}"
+        )
 
 
 class Wifi(Peripheral):
@@ -120,6 +123,7 @@ class Wifi(Peripheral):
         self.ipaddress = ipaddress
 
         super().__init__(name, pins, pType)
+        log.info(f"Initialized Wifi peripheral {name} with SSID {SSID} on band {band}")
 
 
 class Ethernet(Peripheral):
@@ -202,6 +206,9 @@ class Ethernet(Peripheral):
         self.duplex = duplex
 
         super().__init__(name, pins, pType)
+        log.info(
+            f"Initialized Ethernet peripheral {name} with MAC {mac_address} at IP {ipaddress}"
+        )
 
 
 class JTAG(Peripheral):
@@ -237,6 +244,7 @@ class JTAG(Peripheral):
         self.pType = pType
         self.name = name
         super().__init__(name, pins, pType)
+        log.info(f"Initialized JTAG peripheral {name}")
 
 
 class Bluetooth(Peripheral):
@@ -257,6 +265,9 @@ class Bluetooth(Peripheral):
         self.paired_devices = paired_devices
 
         super().__init__(name, pins, pType)
+        log.info(
+            f"Initialized Bluetooth peripheral {name} with device name {device_name} and MAC {mac_address}"
+        )
 
 
 class USB(Peripheral):
@@ -277,6 +288,9 @@ class USB(Peripheral):
         self.role = role
 
         super().__init__(name, pins, pType)
+        log.info(
+            f"Initialized USB peripheral {name} with version {version}, speed {speed}, role {role}"
+        )
 
 
 class PCIe(Peripheral):
@@ -311,6 +325,9 @@ class PCIe(Peripheral):
         self.memory = memory
 
         super().__init__(name, pins, pType)
+        log.info(
+            f"Initialized PCIe peripheral {name} with version {version}, lanes {lanes}, role {role}"
+        )
 
 
 class TPM_register(Enum):
@@ -398,6 +415,7 @@ class TPM(Peripheral):
             pType (PeripheralType): Type of the peripheral, defaults to PeripheralType.TPM.
         """
         super().__init__(name, pins, pType)
+        log.info(f"Initialized TPM peripheral {name}")
 
     def _tpm_input_header(self, tag: int, len: int, code: int) -> bytes:
         """10 byte header that will prepend every command sent from the host to the TPM"""

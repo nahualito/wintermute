@@ -25,9 +25,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, List, Optional, Protocol
 
 from ..findings import ReproductionStep, Risk, Vulnerability
+
+log = logging.getLogger(__name__)
 
 
 class SupportsVulns(Protocol):
@@ -122,11 +125,14 @@ def add_reproduction_step(
     step: ReproductionStep | dict[Any, Any],
 ) -> bool:
     v = get_vulnerability(obj, uid=uid, title=title)
+    log.debug(f"Adding reproduction step to vulnerability: {v}")
     if not v:
+        log.warning(f"Vulnerability not found for uid={uid} title={title}")
         return False
     v.reproduction_steps.append(
         step if isinstance(step, ReproductionStep) else ReproductionStep.from_dict(step)
     )
+    log.debug(f"Reproduction step added: {step}")
     return True
 
 
@@ -139,8 +145,10 @@ def remove_vulnerability(
     for i, v in enumerate(obj.vulnerabilities):
         if uid is not None and getattr(v, "uid", None) == uid:
             obj.vulnerabilities.pop(i)
+            log.info(f"Vulnerability removed: uid={uid}")
             return True
         if title is not None and v.title == title:
             obj.vulnerabilities.pop(i)
+            log.info(f"Vulnerability removed: title={title}")
             return True
     return False
