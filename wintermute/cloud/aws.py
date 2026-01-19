@@ -359,6 +359,7 @@ class AWSAccount(CloudAccount):
     def addService(
         self,
         name: str,
+        arn: str,
         service_type: AWSServiceType,
         config: Dict[str, Any] = {},
         custom_properties: Dict[str, Any] = {},
@@ -368,6 +369,7 @@ class AWSAccount(CloudAccount):
             self.services,
             AWSService,
             name=name,
+            arn=arn,
             service_type=service_type,
             config=config or {},
             custom_properties=custom_properties or {},
