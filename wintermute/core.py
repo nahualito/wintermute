@@ -647,8 +647,6 @@ class Operation(BaseModel):
         "analysts": Analyst,
         "devices": Device,
         "users": User,
-        # "awsaccounts": AWSAccount,
-        # "cloud_accounts": CloudAccount,
         "test_plans": TestPlan,
         "test_runs": TestCaseRun,
     }
@@ -663,36 +661,50 @@ class Operation(BaseModel):
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
         users: list[User] | list[dict[str, Any]] | None = None,
         operation_id: str = str(uuid.uuid1()),
+        # ADDED cloud_accounts argument
         cloud_accounts: list[Any] | list[dict[str, Any]] | None = None,
         awsaccounts: list[Any] | list[dict[str, Any]] | None = None,
+        # ADDED test_plans and test_runs (Fixes IndexError)
+        test_plans: list[TestPlan] | list[dict[str, Any]] | None = None,
+        test_runs: list[TestCaseRun] | list[dict[str, Any]] | None = None,
         db: str = "",
-        **kwargs: Any,  # absorb unknown keys safely
+        **kwargs: Any,
     ) -> None:
         self.operation_name = operation_name
-        self._db = TinyDB(f"{operation_name}.json")  # private so to_dict skips it
+        self._db = TinyDB(f"{operation_name}.json")
         self.operation_id = operation_id
         self.start_date = start_date
         self.end_date = end_date
         self.ticket = ticket or None
 
-        # fresh lists, then append rehydrated items
         self.analysts: list[Analyst] = []
         self.devices: list[Device] = []
         self.users: list[User] = []
-
         self.cloud_accounts: list[Any] = []
 
+        # Logic using cloud_type
         for acc in cloud_accounts or []:
-            c_type = (
-                acc.get("cloud_type")
-                if isinstance(acc, dict)
-                else getattr(acc, "cloud_type", None)
-            )
+            c_type = None
+            if isinstance(acc, dict):
+                c_type = acc.get("cloud_type")
+            else:
+                c_type = getattr(acc, "cloud_type", None)
+
             if c_type == "AWS":
                 self.cloud_accounts.append(
                     AWSAccount.from_dict(acc) if isinstance(acc, dict) else acc
                 )
             else:
+                self.cloud_accounts.append(acc)
+
+        # Legacy AWS Accounts (Force cloud_type="AWS")
+        for acc in awsaccounts or []:
+            if isinstance(acc, dict):
+                acc["cloud_type"] = "AWS"
+                self.cloud_accounts.append(AWSAccount.from_dict(acc))
+            else:
+                if not hasattr(acc, "cloud_type"):
+                    acc.cloud_type = "AWS"
                 self.cloud_accounts.append(acc)
 
         for a in analysts or []:
@@ -701,31 +713,23 @@ class Operation(BaseModel):
             self.devices.append(Device.from_dict(d) if isinstance(d, dict) else d)
         for u in users or []:
             self.users.append(User.from_dict(u) if isinstance(u, dict) else u)
-        for acc in awsaccounts or []:
-            self.cloud_accounts.append(
-                AWSAccount.from_dict(acc) if isinstance(acc, dict) else acc
-            )
 
-        # test plans + runs (optional; allows multiple plans per operation)
+        # Rehydration for TestPlans (Fixes missing args issue)
         self.test_plans: list[TestPlan] = []
-        for tp in self.test_plans or []:
+        for tp in test_plans or []:
             self.test_plans.append(
                 TestPlan.from_dict(tp) if isinstance(tp, dict) else tp
             )
-            log.debug(
-                f"Rehydrated TestPlan: {tp.code} for Operation: {self.operation_name}"
-            )
 
+        # Rehydration for TestRuns
         self.test_runs: list[TestCaseRun] = []
-        for tr in self.test_runs or []:
+        for tr in test_runs or []:
             self.test_runs.append(
                 TestCaseRun.from_dict(tr) if isinstance(tr, dict) else tr
             )
-            log.debug(
-                f"Rehydrated TestCaseRun: {tr.run_id} for TestCase: {tr.test_case_code}"
-            )
+
         log.info(
-            f"Created Operation: {self.operation_name} with ID: {self.operation_id} having {len(self.analysts)} analysts, {len(self.devices)} devices, {len(self.users)} users, and {len(self.awsaccounts)} AWS accounts"
+            f"Created Operation: {self.operation_name} with ID: {self.operation_id}"
         )
 
     def addTestPlan(self, plan: TestPlan | dict[str, Any]) -> bool:

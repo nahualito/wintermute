@@ -179,7 +179,7 @@ class AWSAccount(CloudAccount):
         *,
         account_id: str | None = None,
         arn: str | None = None,
-        partition: str = "aws",  # aws, aws-us-gov, aws-cn
+        partition: str = "aws",
         default_region: str | None = None,
         tags: Dict[str, str] | None = None,
         users: Optional[List[AWSUser | Dict[str, Any]]] = None,
@@ -188,11 +188,13 @@ class AWSAccount(CloudAccount):
         services: Optional[List[AWSService | Dict[str, Any]]] = None,
         vulnerabilities: Optional[List[Any]] = None,
         roles: Optional[List[Any]] = None,
+        # Note: cloud_type is NOT an argument here, we set it below
     ) -> None:
-        # let CloudAccount handle name/description/vulnerabilities coercion
         super().__init__(
             name=name, description=description, vulnerabilities=vulnerabilities
         )
+
+        self.cloud_type = "AWS"
 
         self.account_id = account_id
         self.arn = arn
@@ -205,7 +207,7 @@ class AWSAccount(CloudAccount):
         self.iamusers: List[IAMUser] = _load_list(iamusers, IAMUser)
         self.iamroles: List[IAMRole] = _load_list(iamroles, IAMRole)
         self.services: List[AWSService] = _load_list(services, AWSService)
-        self.cloud_type = "AWS"
+
         log.info(f"AWSAccount initialized: {self.account_id} - {self.name}")
 
     # Optional: convenience
