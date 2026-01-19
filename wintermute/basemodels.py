@@ -381,11 +381,13 @@ class CloudAccount(BaseModel):
         self,
         name: str,
         description: str = "",
+        cloud_type: str = "unknown",
         *,
         vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.name = name
         self.description = description
+        self.cloud_type = cloud_type
         from .findings import Vulnerability as _Vulnerability
 
         self.vulnerabilities: List[_Vulnerability] = []

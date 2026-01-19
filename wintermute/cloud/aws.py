@@ -205,6 +205,7 @@ class AWSAccount(CloudAccount):
         self.iamusers: List[IAMUser] = _load_list(iamusers, IAMUser)
         self.iamroles: List[IAMRole] = _load_list(iamroles, IAMRole)
         self.services: List[AWSService] = _load_list(services, AWSService)
+        self.cloud_type = "AWS"
         log.info(f"AWSAccount initialized: {self.account_id} - {self.name}")
 
     # Optional: convenience

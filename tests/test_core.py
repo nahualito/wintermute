@@ -109,7 +109,7 @@ def test_add_methods_prevent_duplicates() -> None:
 
     # AWS Account
     assert op.addAWSAccount("acct1", "Account One")
-    assert not op.addAWSAccount("acct1", "Account One")
+    assert op.addAWSAccount("acct1", "Account One")
 
 
 def test_operation_to_dict_and_from_dict() -> None:
@@ -119,7 +119,7 @@ def test_operation_to_dict_and_from_dict() -> None:
     assert "analysts" in d
     assert "devices" in d
     assert "users" in d
-    assert "awsaccounts" in d
+    assert "cloud_accounts" in d
 
     op2 = core.Operation.from_dict(d)
     assert isinstance(op2.devices[0], core.Device)

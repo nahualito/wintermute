@@ -43,7 +43,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from tinydb import TinyDB
 
 from .basemodels import BaseModel, Peripheral, PeripheralType
-from .cloud.aws import AWSAccount, AWSService, AWSUser, IAMRole, IAMUser
+from .cloud.aws import AWSAccount
 from .findings import ReproductionStep, Vulnerability
 from .hardware import Architecture, Memory, Processor
 
@@ -647,7 +647,8 @@ class Operation(BaseModel):
         "analysts": Analyst,
         "devices": Device,
         "users": User,
-        "awsaccounts": AWSAccount,
+        # "awsaccounts": AWSAccount,
+        # "cloud_accounts": CloudAccount,
         "test_plans": TestPlan,
         "test_runs": TestCaseRun,
     }
@@ -662,7 +663,8 @@ class Operation(BaseModel):
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
         users: list[User] | list[dict[str, Any]] | None = None,
         operation_id: str = str(uuid.uuid1()),
-        awsaccounts: list[AWSAccount] | list[dict[str, Any]] | None = None,
+        cloud_accounts: list[Any] | list[dict[str, Any]] | None = None,
+        awsaccounts: list[Any] | list[dict[str, Any]] | None = None,
         db: str = "",
         **kwargs: Any,  # absorb unknown keys safely
     ) -> None:
@@ -677,7 +679,21 @@ class Operation(BaseModel):
         self.analysts: list[Analyst] = []
         self.devices: list[Device] = []
         self.users: list[User] = []
-        self.awsaccounts: list[AWSAccount] = []
+
+        self.cloud_accounts: list[Any] = []
+
+        for acc in cloud_accounts or []:
+            c_type = (
+                acc.get("cloud_type")
+                if isinstance(acc, dict)
+                else getattr(acc, "cloud_type", None)
+            )
+            if c_type == "AWS":
+                self.cloud_accounts.append(
+                    AWSAccount.from_dict(acc) if isinstance(acc, dict) else acc
+                )
+            else:
+                self.cloud_accounts.append(acc)
 
         for a in analysts or []:
             self.analysts.append(Analyst.from_dict(a) if isinstance(a, dict) else a)
@@ -686,9 +702,10 @@ class Operation(BaseModel):
         for u in users or []:
             self.users.append(User.from_dict(u) if isinstance(u, dict) else u)
         for acc in awsaccounts or []:
-            self.awsaccounts.append(
+            self.cloud_accounts.append(
                 AWSAccount.from_dict(acc) if isinstance(acc, dict) else acc
             )
+
         # test plans + runs (optional; allows multiple plans per operation)
         self.test_plans: list[TestPlan] = []
         for tp in self.test_plans or []:
@@ -1113,64 +1130,158 @@ class Operation(BaseModel):
         )
         return False
 
-    def addAWSAccount(
+    # Helper to merge lists without duplicates
+    def _merge_lists(self, target_list: list[Any], source_list: list[Any]) -> None:
+        """Appends items from source_list to target_list if they don't already exist."""
+        if not source_list:
+            return
+        for item in source_list:
+            if item not in target_list:
+                target_list.append(item)
+
+    def addCloudAccount(
         self,
         name: str,
+        cloud_type: str = "AWS",
         description: str = "",
         *,
+        # Common generic args
         account_id: str | None = None,
-        arn: str | None = None,
-        partition: str = "aws",  # aws, aws-us-gov, aws-cn
-        default_region: str | None = None,
         tags: Dict[str, str] | None = None,
-        users: Optional[List[AWSUser | Dict[str, Any]]] = None,
-        iamusers: Optional[List[IAMUser | Dict[str, Any]]] = None,
-        iamroles: Optional[List[IAMRole | Dict[str, Any]]] = None,
-        services: Optional[List[AWSService | Dict[str, Any]]] = None,
-        vulnerabilities: Optional[List[Any]] = None,
+        # Data to append/merge
+        users: Optional[List[Any]] = None,
         roles: Optional[List[Any]] = None,
+        services: Optional[List[Any]] = None,
+        vulnerabilities: Optional[List[Any]] = None,
+        # Catch-all for provider specific args (e.g. partition, arn for AWS)
+        **kwargs: Any,
     ) -> bool:
-        """Add an AWS Account to the operation"""
-        a = AWSAccount(
-            name=name,
-            description=description,
-            account_id=account_id,
-            arn=arn,
-            partition=partition,
-            default_region=default_region,
-            tags=tags,
-            users=users,
-            iamusers=iamusers,
-            iamroles=iamroles,
-            services=services,
-            vulnerabilities=vulnerabilities,
-            roles=roles,
-        )
-        log.debug(
-            f"Attempting to add AWS Account {name} to Operation {self.operation_name}"
-        )
-        if a not in self.awsaccounts:
-            self.awsaccounts.append(a)
-            log.info(f"Added AWS Account {name} to Operation {self.operation_name}")
+        """
+        Adds or Updates a Cloud Account.
+        If the account exists, it appends the provided users/services/roles.
+        """
+
+        # 1. Determine the Class based on type
+        TargetClass = None
+        if cloud_type.upper() == "AWS":
+            TargetClass = AWSAccount
+        # elif cloud_type.upper() == "GCP":
+        #     TargetClass = GCPAccount
+        else:
+            log.error(f"Unsupported Cloud Type: {cloud_type}")
+            return False
+
+        # 2. Check if account already exists (by account_id or name)
+        existing_acc = None
+        for acc in self.cloud_accounts:
+            # Check type match first
+            if not isinstance(acc, TargetClass):
+                continue
+
+            # Match by ID if present, otherwise by Name
+            if account_id and getattr(acc, "account_id", None) == account_id:
+                existing_acc = acc
+                break
+            elif acc.name == name:
+                existing_acc = acc
+                break
+
+        # 3. Update Existing Account
+        if existing_acc:
+            log.info(f"Updating existing {cloud_type} account: {name}")
+
+            # Update simple fields if they are not empty
+            if description:
+                existing_acc.description = description
+            if tags and hasattr(existing_acc, "tags"):
+                if existing_acc.tags is None:
+                    existing_acc.tags = {}
+                existing_acc.tags.update(tags)
+
+            # Merge Lists (Append Only)
+            # This assumes the underlying classes (AWSUser, etc.) have proper __eq__ checks
+            # or rely on object identity if they are reused.
+            if hasattr(existing_acc, "users") and users:
+                self._merge_lists(existing_acc.users, users)
+
+            if hasattr(existing_acc, "roles") and roles:  # Generic roles
+                self._merge_lists(existing_acc.roles, roles)
+
+            if (
+                hasattr(existing_acc, "iamroles") and "iamroles" in kwargs
+            ):  # AWS Specific
+                self._merge_lists(existing_acc.iamroles, kwargs["iamroles"])
+
+            if hasattr(existing_acc, "services") and services:
+                self._merge_lists(existing_acc.services, services)
+
+            if hasattr(existing_acc, "vulnerabilities") and vulnerabilities:
+                self._merge_lists(existing_acc.vulnerabilities, vulnerabilities)
+
             return True
-        log.warning(
-            f"AWS Account {name} already exists in Operation {self.operation_name}, not adding."
-        )
+
+        # 4. Create New Account
+        else:
+            log.info(f"Creating new {cloud_type} account: {name}")
+
+            # Construct arguments for the specific class
+            # We filter kwargs to ensure we don't pass 'type' if the class doesn't want it,
+            # but usually passing **kwargs to init is fine if the class handles it.
+            try:
+                if cloud_type.upper() == "AWS":
+                    # AWSAccount specific signature mapping
+                    new_acc = AWSAccount(
+                        name=name,
+                        description=description,
+                        account_id=account_id,
+                        tags=tags,
+                        users=users,
+                        services=services,
+                        vulnerabilities=vulnerabilities,
+                        roles=roles,
+                        **kwargs,  # Passes arn, partition, iamusers, etc.
+                    )
+                else:
+                    # Generic Fallback
+                    new_acc = TargetClass(
+                        name=name,
+                        description=description,
+                        account_id=account_id,
+                        **kwargs,
+                    )
+
+                self.cloud_accounts.append(new_acc)
+                return True
+            except Exception as e:
+                log.error(f"Failed to create cloud account: {e}")
+                return False
+
+    def delCloudAccount(self, id_or_name: str) -> bool:
+        """Delete a Cloud Account by account_id or name."""
+        for acc in self.cloud_accounts:
+            # Check ID
+            if getattr(acc, "account_id", None) == id_or_name:
+                self.cloud_accounts.remove(acc)
+                return True
+            # Check Name
+            if getattr(acc, "name", None) == id_or_name:
+                self.cloud_accounts.remove(acc)
+                return True
         return False
 
-    def delAWSAccount(self, accountId: str) -> bool:
-        """Delete an AWS Account from the operation by accountId"""
-        for a in self.awsaccounts:
-            if a.account_id == accountId:
-                self.awsaccounts.remove(a)
-                log.info(
-                    f"Deleted AWS Account {accountId} from Operation {self.operation_name}"
-                )
-                return True
-        log.warning(
-            f"AWS Account {accountId} not found in Operation {self.operation_name}, cannot delete."
+    # Alias for backward compatibility
+    def addAWSAccount(self, name: str, description: str = "", **kwargs: Any) -> bool:
+        return self.addCloudAccount(
+            name=name, cloud_type="AWS", description=description, **kwargs
         )
-        return False
+
+    def delAWSAccount(self, accountId: str) -> bool:
+        return self.delCloudAccount(accountId)
+
+    @property
+    def awsaccounts(self) -> list[AWSAccount]:
+        """Dynamic property to maintain backward compatibility for accessing AWS accounts."""
+        return [acc for acc in self.cloud_accounts if isinstance(acc, AWSAccount)]
 
     def save(self) -> None:
         """Save the operation to the TinyDB database"""
