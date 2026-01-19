@@ -190,6 +190,33 @@ class AWSAccount(CloudAccount):
         roles: Optional[List[Any]] = None,
         # Note: cloud_type is NOT an argument here, we set it below
     ) -> None:
+        # --- DEFENSIVE FIX START ---
+        # Detect if 'name' is actually the data dictionary (the cause of your bug)
+        if isinstance(name, dict):
+            data = name
+            # 1. Extract the real scalars
+            name = data.get("name", "Unknown-Recovered")
+            description = data.get("description", description)
+            account_id = data.get("account_id", account_id)
+            arn = data.get("arn", arn)
+            partition = data.get("partition", partition)
+            default_region = data.get("default_region", default_region)
+
+            # 2. Extract lists if they weren't passed in kwargs
+            #    (Use existing values if provided, else look in dict)
+            tags = tags or data.get("tags")
+            users = users or data.get("users")
+            iamusers = iamusers or data.get("iamusers")
+            iamroles = iamroles or data.get("iamroles")
+            services = services or data.get("services")
+            vulnerabilities = vulnerabilities or data.get("vulnerabilities")
+            roles = roles or data.get("roles")
+
+            log.warning(
+                f"Self-Corrected AWSAccount initialization for: {name} (ID: {account_id})"
+            )
+        # --- DEFENSIVE FIX END ---
+
         super().__init__(
             name=name, description=description, vulnerabilities=vulnerabilities
         )
