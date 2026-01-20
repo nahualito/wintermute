@@ -38,10 +38,6 @@ class JsonFileBackend:
         >>> from wintermute.core import Operation
         >>> from wintermute.backends.json_storage import JsonFileBackend
         >>> backend = JsonFileBackend()
-        >>> Opeartion.register_backend("json_local", backend, make_default=True)
-        Traceback (most recent call last):
-        File "<stdin>", line 1, in <module>
-        NameError: name 'Opeartion' is not defined. Did you mean: 'Operation'?
         >>> Operation.register_backend("json_local", backend, make_default=True)
         >>> op = Operation("Project_Test1")
         >>> op.addAnalyst("Ripley", "ripley", "ripley@foobar.com")
