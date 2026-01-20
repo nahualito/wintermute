@@ -32,20 +32,18 @@ Device, Service, User, AWSAccount, Analyst, Operation, and Pentest.
 """
 
 import ipaddress
-import json
 import logging
 import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence
-
-from tinydb import TinyDB
+from typing import Any, ClassVar, Dict, List, Optional, Sequence
 
 from .basemodels import BaseModel, Peripheral, PeripheralType
 from .cloud.aws import AWSAccount
 from .findings import ReproductionStep, Vulnerability
 from .hardware import Architecture, Memory, Processor
+from .storage import StorageBackend
 
 __all__ = [
     "Device",
@@ -651,6 +649,36 @@ class Operation(BaseModel):
         "test_runs": TestCaseRun,
     }
 
+    _backend: ClassVar[Optional[StorageBackend]] = None
+    _backends: ClassVar[Dict[str, StorageBackend]] = {}
+
+    @classmethod
+    def register_backend(
+        cls, name: str, backend: StorageBackend, *, make_default: bool = False
+    ) -> None:
+        """Register a storage backend."""
+        cls._backends[name] = backend
+        if make_default or cls._backend is None:
+            cls._backend = backend
+        log.info(f"Registered storage backend: {name} (default={make_default})")
+
+    @classmethod
+    def use_backend(cls, name: str) -> None:
+        """Switch the active backend for all operations."""
+        if name not in cls._backends:
+            raise ValueError(f"Backend '{name}' is not registered.")
+        cls._backend = cls._backends[name]
+
+    @property
+    def backend(self) -> StorageBackend:
+        """Helper to get the active backend or raise error."""
+        if Operation._backend is None:
+            raise RuntimeError(
+                "No Storage Backend configured! "
+                "Call Operation.register_backend(...) first."
+            )
+        return Operation._backend
+
     def __init__(
         self,
         operation_name: str = "Wintermute",
@@ -661,17 +689,13 @@ class Operation(BaseModel):
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
         users: list[User] | list[dict[str, Any]] | None = None,
         operation_id: str = str(uuid.uuid1()),
-        # ADDED cloud_accounts argument
         cloud_accounts: list[Any] | list[dict[str, Any]] | None = None,
         awsaccounts: list[Any] | list[dict[str, Any]] | None = None,
-        # ADDED test_plans and test_runs (Fixes IndexError)
         test_plans: list[TestPlan] | list[dict[str, Any]] | None = None,
         test_runs: list[TestCaseRun] | list[dict[str, Any]] | None = None,
-        db: str = "",
         **kwargs: Any,
     ) -> None:
         self.operation_name = operation_name
-        self._db = TinyDB(f"{operation_name}.json")
         self.operation_id = operation_id
         self.start_date = start_date
         self.end_date = end_date
@@ -991,16 +1015,6 @@ class Operation(BaseModel):
             "by_status": by_status,
         }
 
-    @property
-    def dbOperation(self) -> TinyDB:
-        return self._db
-
-    @dbOperation.setter
-    def dbOperation(self, value: str) -> None:
-        if value is not None:
-            self.operation_name = value
-            self._db = TinyDB(f"{value}.json")
-
     def addAnalyst(self, name: str, userid: str, email: str) -> bool:
         """Add an analyst to the operation"""
         a = Analyst(name, userid, email)
@@ -1287,22 +1301,26 @@ class Operation(BaseModel):
         """Dynamic property to maintain backward compatibility for accessing AWS accounts."""
         return [acc for acc in self.cloud_accounts if isinstance(acc, AWSAccount)]
 
-    def save(self) -> None:
-        """Save the operation to the TinyDB database"""
-        db = TinyDB(f"{self.operation_name}.json")
-        db.drop_tables()
-        db.insert(self.to_dict())
-        db.close()
-        log.info(f"Saved Operation {self.operation_name} to database")
+    def save(self) -> bool:
+        """Save using the globally registered backend."""
+        log.info(f"Saving Operation {self.operation_name}...")
+        # to_dict() comes from BaseModel
+        data = self.to_dict()
+        return self.backend.save(self.operation_name, data)
 
-    def load(self) -> None:
-        """Load the operation from the TinyDB database"""
-        db = TinyDB(f"{self.operation_name}.json")
-        saved = db.all()[0]
-        db.close()
-        loaded = Operation.from_dict(saved)
+    def load(self) -> bool:
+        """Load using the globally registered backend."""
+        log.info(f"Loading Operation {self.operation_name}...")
+        data = self.backend.load(self.operation_name)
+
+        if not data:
+            log.warning(f"No data found for {self.operation_name}")
+            return False
+
+        # Re-hydrate logic (using from_dict logic from BaseModel)
+        loaded = Operation.from_dict(data)
         self.__dict__.update(loaded.__dict__)
-        log.info(f"Loaded Operation {self.operation_name} from database")
+        return True
 
 
 class Pentest(Operation):
@@ -1344,7 +1362,6 @@ class Pentest(Operation):
         dataClassification: str = "",
         testEnvironment: str = "",
         ApplicationName: str = "DefaultApp",
-        db: TinyDB = TinyDB("Wintermute.json"),
         devices: list[Device] = [],
         start_date: str = datetime.today().strftime("%m/%d/%Y"),
         end_date: str = datetime.today().strftime("%m/%d/%Y"),
@@ -1399,12 +1416,3 @@ class Pentest(Operation):
         log.info(
             f"Created Pentest: {self.operation_name} with ApplicationName: {self.ApplicationName} and dataClassification: {self.dataClassification}"
         )
-
-    def loadPentest(self) -> None:
-        """Load the pentest from the TinyDB database"""
-        f = open(f"{self.operation_name}.json")
-        savedData = json.load(f)
-        # First record, we shouldn't have more than one anyway, if so .. we shall revisit this
-        print(savedData)
-        self.__init__(**savedData["_default"]["1"])  # type: ignore[misc]
-        log.info(f"Loaded Pentest {self.operation_name} from database")

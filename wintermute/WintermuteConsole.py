@@ -202,7 +202,7 @@ class wintermute(cmd2.Cmd):
     def do_ManageOperation(self, args: argparse.Namespace) -> None:
         """Manage operations (Create, Delete, Start date and End date)"""
         if args.create:
-            CurrentOperation.dbOperation = args.create
+            CurrentOperation.operation_name = args.create
 
         if args.startdate:
             CurrentOperation.start_date = datetime.strptime(
@@ -238,7 +238,7 @@ class wintermute(cmd2.Cmd):
     @cmd2.with_category("Operation Commands")
     def do_loadOperation(self, args: argparse.Namespace) -> None:
         if args.operation:
-            CurrentOperation.dbOperation = args.operation
+            CurrentOperation.operation_name = args.operation
             CurrentOperation.load()
         pass
 
