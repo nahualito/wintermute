@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 class JsonFileBackend:
     """Stores operations as JSON files in a specific directory.
-    
+
     Examples:
         >>> from wintermute.core import Operation
         >>> from wintermute.backends.json_storage import JsonFileBackend
@@ -54,21 +54,21 @@ class JsonFileBackend:
         >>> op2
         <wintermute.core.Operation object at 0x745c92ded7c0>
         >>> op2.to_dict()
-        {'operation_name': 'Project_Test1', 
-            'operation_id': '8b5b3662-f597-11f0-a793-54b2030b4724', 
-            'start_date': '01/19/2026', 'end_date': '01/19/2026', 
-            'ticket': None, 
+        {'operation_name': 'Project_Test1',
+            'operation_id': '8b5b3662-f597-11f0-a793-54b2030b4724',
+            'start_date': '01/19/2026', 'end_date': '01/19/2026',
+            'ticket': None,
             'analysts': [
                 {
-                    'name': 'Ripley', 
-                    'userid': 'ripley', 
+                    'name': 'Ripley',
+                    'userid': 'ripley',
                     'email': 'ripley@foobar.com'
                 }
-            ], 
-            'devices': [], 
-            'users': [], 
-            'cloud_accounts': [], 
-            'test_plans': [], 
+            ],
+            'devices': [],
+            'users': [],
+            'cloud_accounts': [],
+            'test_plans': [],
             'test_runs': []
         }
 
