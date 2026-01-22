@@ -124,25 +124,30 @@ def make_full_operation(tmp_path: Path) -> core.Operation:
 def test_add_methods_prevent_duplicates() -> None:
     op = core.Operation("DupOp")
 
-    # Analyst
+    # --- Analyst ---
     assert op.addAnalyst("Bob", "bsmith", "bob@example.com")
-    assert not op.addAnalyst("Bob", "bsmith", "bob@example.com")
+    # PREVIOUSLY: assert not op.addAnalyst(...)
+    # NEW LOGIC: It returns True (merge successful), so we check length instead.
+    assert op.addAnalyst("Bob", "bsmith", "bob@example.com")
+    assert len(op.analysts) == 1
 
-    # Device
-    assert op.addDevice("h", "127.0.0.1", "00", "Linux", "h.local")
-    assert not op.addDevice("h", "127.0.0.1", "00", "Linux", "h.local")
+    # --- Device ---
+    assert op.addDevice("host1", "127.0.0.1")
+    # Should merge and return True
+    assert op.addDevice("host1", "127.0.0.1")
+    assert len(op.devices) == 1
 
-    # User
-    assert op.addUser("u1", "User1", "u1@example.com", ["Team"])
-    assert not op.addUser("u1", "User1", "u1@example.com", ["Team"])
+    # --- User ---
+    assert op.addUser("uid1", "User One", "u1@example.com", ["TeamA"])
+    # Should merge and return True
+    assert op.addUser("uid1", "User One", "u1@example.com", ["TeamA"])
+    assert len(op.users) == 1
 
-    # AWS Account
-    assert op.addAWSAccount("acct1", "Account One")
-    # Note: Updated to assert True as the new logic likely updates/merges instead of returning False
-    # If strictly maintaining legacy behavior of rejecting duplicates, this would remain 'not op...'
-    # Based on your previous refactoring, this might now return True (update).
-    # Adjusting to generic expectation or reverting to your specific logic:
-    # assert not op.addAWSAccount("acct1", "Account One")
+    # --- Cloud Account ---
+    assert op.addCloudAccount("aws-prod", account_id="123456789012")
+    # Should merge and return True
+    assert op.addCloudAccount("aws-prod", account_id="123456789012")
+    assert len(op.cloud_accounts) == 1
 
 
 def test_operation_to_dict_and_from_dict() -> None:

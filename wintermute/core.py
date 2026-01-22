@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional, Sequence
 
-from .basemodels import BaseModel, Peripheral, PeripheralType
+from .basemodels import BaseModel, CloudAccount, Peripheral, PeripheralType
 from .cloud.aws import AWSAccount
 from .findings import ReproductionStep, Vulnerability
 from .hardware import Architecture, Memory, Processor
@@ -1015,19 +1015,276 @@ class Operation(BaseModel):
             "by_status": by_status,
         }
 
+    # -----------------------------------------------------------------------
+    # Helper Methods for Merging
+    # -----------------------------------------------------------------------
+
+    def _merge_lists(self, target_list: list[Any], source_list: list[Any]) -> None:
+        """Appends items from source_list to target_list if they don't already exist."""
+        if not source_list:
+            return
+        for item in source_list:
+            # Note: This relies on the objects' __eq__ implementation.
+            # For BaseModels, this checks if to_dict() is identical.
+            if item not in target_list:
+                target_list.append(item)
+
+    def _merge_attributes(self, target: Any, source: Any) -> None:
+        """
+        Generic merger for Wintermute objects.
+        - Lists: Extended using _merge_lists (append unique).
+        - Dicts: Updated (shallow merge).
+        - Scalars: Overwritten if the source value is truthy/non-default.
+        """
+        # We iterate over the source's __dict__ to find what attributes are set
+        # skipping private attributes starting with _
+        for key, source_val in source.__dict__.items():
+            if key.startswith("_"):
+                continue
+
+            # If source value is None, we assume we shouldn't overwrite existing data
+            if source_val is None:
+                continue
+
+            # If target doesn't have this attribute, just set it
+            if not hasattr(target, key):
+                setattr(target, key, source_val)
+                continue
+
+            target_val = getattr(target, key)
+
+            # 1. Handle Lists (e.g. services, vulnerabilities, cloud_accounts)
+            if isinstance(source_val, list) and isinstance(target_val, list):
+                self._merge_lists(target_val, source_val)
+
+            # 2. Handle Dictionaries (e.g. tags, pins)
+            elif isinstance(source_val, dict) and isinstance(target_val, dict):
+                target_val.update(source_val)
+
+            # 3. Handle Scalars (Strings, Ints, Enums)
+            else:
+                # Only overwrite if source has data and it differs from target
+                # We use 'source_val' check to avoid overwriting with empty defaults ("" or 0)
+                # unless you specifically want to allow clearing values.
+                if source_val and source_val != target_val:
+                    setattr(target, key, source_val)
+                    log.debug(f"Updated {key} on {target.__class__.__name__}")
+
+    # -----------------------------------------------------------------------
+    # Refactored Add Methods
+    # -----------------------------------------------------------------------
+
     def addAnalyst(self, name: str, userid: str, email: str) -> bool:
-        """Add an analyst to the operation"""
-        a = Analyst(name, userid, email)
-        if a not in self.analysts:
-            self.analysts.append(a)
-            log.info(
-                f"Added Analyst {name} with userid {userid} to Operation {self.operation_name}"
-            )
+        """Add or merge an analyst in the operation."""
+        new_analyst = Analyst(name, userid, email)
+
+        # Check for existing by Unique ID (userid)
+        existing = next((a for a in self.analysts if a.userid == userid), None)
+
+        if existing:
+            log.info(f"Analyst {userid} exists. Merging new data.")
+            self._merge_attributes(existing, new_analyst)
             return True
-        log.warning(
-            f"Analyst {name} with userid {userid} already exists in Operation {self.operation_name}, not adding."
+        else:
+            self.analysts.append(new_analyst)
+            log.info(f"Added Analyst {name} ({userid}) to Operation.")
+            return True
+
+    def addDevice(
+        self,
+        hostname: str,
+        ipaddr: str = "127.0.0.1",
+        macaddr: str = "",
+        operatingsystem: str = "",
+        fqdn: str = "",
+        *,
+        ipAddress: Optional[str] = None,
+        macAddress: Optional[str] = None,
+        os: Optional[str] = None,
+        # Allow passing pre-built lists if needed
+        services: list[Any] | None = None,
+        peripherals: list[Any] | None = None,
+    ) -> bool:
+        """Add or merge a device in the operation."""
+        # legacy aliases override
+        if ipAddress is not None:
+            ipaddr = ipAddress
+        if macAddress is not None:
+            macaddr = macAddress
+        if os is not None:
+            operatingsystem = os
+
+        new_device = Device(
+            hostname=hostname,
+            ipaddr=ipaddr,
+            macaddr=macaddr,
+            operatingsystem=operatingsystem,
+            fqdn=fqdn,
+            services=services,
+            peripherals=peripherals,
         )
-        return False
+
+        # Check for existing by Unique ID (hostname)
+        existing = self.getDeviceByHostname(hostname)
+
+        if existing:
+            log.info(f"Device {hostname} exists. Merging new data.")
+            self._merge_attributes(existing, new_device)
+            return True
+        else:
+            self.devices.append(new_device)
+            log.info(f"Added Device {hostname} ({ipaddr}) to Operation.")
+            return True
+
+    def addUser(
+        self,
+        uid: str,
+        name: str,
+        email: str,
+        teams: list[str],
+        dept: str = "",
+        permissions: list[str] | None = None,
+        override_reason: str = "",
+        desktops: list[Device] | None = None,
+        ldap_groups: list[str] | None = None,
+        cloud_accounts: list[str] | None = None,
+    ) -> bool:
+        """Add or merge a user in the operation."""
+        new_user = User(
+            uid=uid,
+            name=name,
+            email=email,
+            teams=teams,
+            dept=dept,
+            permissions=permissions,
+            override_reason=override_reason,
+            desktops=desktops,
+            ldap_groups=ldap_groups,
+            cloud_accounts=cloud_accounts,
+        )
+
+        # Check for existing by Unique ID (uid)
+        existing = next((u for u in self.users if u.uid == uid), None)
+
+        if existing:
+            log.info(f"User {uid} exists. Merging new data.")
+            self._merge_attributes(existing, new_user)
+            return True
+        else:
+            self.users.append(new_user)
+            log.info(f"Added User {uid} to Operation.")
+            return True
+
+    def addCloudAccount(
+        self,
+        name: str,
+        cloud_type: str = "AWS",
+        description: str = "",
+        *,
+        # Common generic args
+        account_id: str | None = None,
+        tags: Dict[str, str] | None = None,
+        # Data to append/merge
+        users: Optional[List[Any]] = None,
+        roles: Optional[List[Any]] = None,
+        services: Optional[List[Any]] = None,
+        vulnerabilities: Optional[List[Any]] = None,
+        # Catch-all for provider specific args (e.g. partition, arn for AWS)
+        **kwargs: Any,
+    ) -> bool:
+        """
+        Adds or Updates a Cloud Account.
+        """
+
+        # [FIX 1] Defensive: Ensure 'cloud_type' is never in kwargs passed to constructors
+        kwargs.pop("cloud_type", None)
+
+        # 1. Identify Target Class
+        #    (We use the actual class objects for instanceof checks)
+        TargetClass: Any = AWSAccount if cloud_type.upper() == "AWS" else CloudAccount
+
+        # 2. Check if account already exists
+        existing_acc = None
+        for acc in self.cloud_accounts:
+            if not isinstance(acc, TargetClass):
+                continue
+            # Match by ID or Name
+            if (
+                account_id and getattr(acc, "account_id", None) == account_id
+            ) or acc.name == name:
+                existing_acc = acc
+                break
+
+        # 3. Update Existing Account
+        if existing_acc:
+            log.info(f"Updating existing {cloud_type} account: {name}")
+
+            if description:
+                existing_acc.description = description
+            if tags and hasattr(existing_acc, "tags"):
+                if existing_acc.tags is None:
+                    existing_acc.tags = {}
+                existing_acc.tags.update(tags)
+
+            # Use your helper to merge lists
+            if hasattr(existing_acc, "users") and users:
+                self._merge_lists(existing_acc.users, users)
+            if hasattr(existing_acc, "roles") and roles:
+                self._merge_lists(existing_acc.roles, roles)
+            if hasattr(existing_acc, "services") and services:
+                self._merge_lists(existing_acc.services, services)
+            if hasattr(existing_acc, "vulnerabilities") and vulnerabilities:
+                self._merge_lists(existing_acc.vulnerabilities, vulnerabilities)
+
+            # Merge AWS specific fields if present in kwargs
+            if isinstance(existing_acc, AWSAccount):
+                if "iamroles" in kwargs:
+                    self._merge_lists(existing_acc.iamroles, kwargs["iamroles"])
+                if "iamusers" in kwargs:
+                    self._merge_lists(existing_acc.iamusers, kwargs["iamusers"])
+
+            return True
+
+        # 4. Create New Account
+        else:
+            log.info(f"Creating new {cloud_type} account: {name}")
+
+            # [FIX 2] Explicit Type Annotation to allow polymorphism
+            new_acc: CloudAccount
+
+            try:
+                if cloud_type.upper() == "AWS":
+                    new_acc = AWSAccount(
+                        name=name,
+                        description=description,
+                        account_id=account_id,
+                        tags=tags,
+                        users=users,
+                        services=services,
+                        vulnerabilities=vulnerabilities,
+                        roles=roles,
+                        **kwargs,  # Passes arn, partition, iamusers, etc.
+                    )
+                else:
+                    # Generic Fallback
+                    # We pass kwargs in case the generic CloudAccount is extended elsewhere
+                    new_acc = CloudAccount(
+                        name=name,
+                        description=description,
+                        cloud_type=cloud_type,
+                        vulnerabilities=vulnerabilities,
+                        # Note: CloudAccount does not accept arbitrary kwargs in __init__
+                        # unless you modify basemodels.py. If it doesn't, do not pass **kwargs here.
+                    )
+                    # Manually attach extra properties for generic accounts
+                    for k, v in kwargs.items():
+                        setattr(new_acc, k, v)
+
+                self.cloud_accounts.append(new_acc)
+                return True
+            except Exception as e:
+                log.error(f"Failed to create cloud account: {e}")
+                return False
 
     def delAnalyst(self, userid: str) -> bool:
         """Delete an analyst from the operation by userid"""
@@ -1049,43 +1306,6 @@ class Operation(BaseModel):
                 return d
         return None
 
-    def addDevice(
-        self,
-        hostname: str,
-        ipaddr: str = "127.0.0.1",
-        macaddr: str = "",
-        operatingsystem: str = "",
-        fqdn: str = "",
-        *,
-        ipAddress: Optional[str] = None,
-        macAddress: Optional[str] = None,
-        os: Optional[str] = None,
-    ) -> bool:
-        """Add a device to the operation (supports legacy keyword aliases)."""
-
-        # legacy aliases override
-        if ipAddress is not None:
-            ipaddr = ipAddress
-        if macAddress is not None:
-            macaddr = macAddress
-        if os is not None:
-            operatingsystem = os
-
-        d = Device(hostname, ipaddr, macaddr, operatingsystem, fqdn)
-        log.debug(
-            f"Attempting to add Device {hostname} ({ipaddr}) to Operation {self.operation_name}"
-        )
-        if d not in self.devices:
-            self.devices.append(d)
-            log.info(
-                f"Added Device {hostname} ({ipaddr}) to Operation {self.operation_name}"
-            )
-            return True
-        log.warning(
-            f"Device {hostname} ({ipaddr}) already exists in Operation {self.operation_name}, not adding."
-        )
-        return False
-
     def delDevice(self, hostname: str) -> bool:
         """Delete a device from the operation by hostname"""
         for d in self.devices:
@@ -1100,42 +1320,6 @@ class Operation(BaseModel):
         )
         return False
 
-    def addUser(
-        self,
-        uid: str,
-        name: str,
-        email: str,
-        teams: list[str],
-        dept: str = "",
-        permissions: list[str] | None = None,
-        override_reason: str = "",
-        desktops: list[Device] | None = None,
-        ldap_groups: list[str] | None = None,
-        cloud_accounts: list[str] | None = None,
-    ) -> bool:
-        """Add a user to the operation"""
-        u = User(
-            uid=uid,
-            name=name,
-            email=email,
-            teams=teams,
-            dept=dept,
-            permissions=permissions or [],
-            override_reason=override_reason,
-            desktops=desktops or [],
-            ldap_groups=ldap_groups or [],
-            cloud_accounts=cloud_accounts or [],
-        )
-        log.debug(f"Attempting to add User {uid} to Operation {self.operation_name}")
-        if u not in self.users:
-            self.users.append(u)
-            log.info(f"Added User {uid} to Operation {self.operation_name}")
-            return True
-        log.warning(
-            f"User {uid} already exists in Operation {self.operation_name}, not adding."
-        )
-        return False
-
     def delUser(self, uid: str) -> bool:
         """Delete a user from the operation by uid"""
         for u in self.users:
@@ -1147,132 +1331,6 @@ class Operation(BaseModel):
             f"User {uid} not found in Operation {self.operation_name}, cannot delete."
         )
         return False
-
-    # Helper to merge lists without duplicates
-    def _merge_lists(self, target_list: list[Any], source_list: list[Any]) -> None:
-        """Appends items from source_list to target_list if they don't already exist."""
-        if not source_list:
-            return
-        for item in source_list:
-            if item not in target_list:
-                target_list.append(item)
-
-    def addCloudAccount(
-        self,
-        name: str,
-        cloud_type: str = "AWS",
-        description: str = "",
-        *,
-        # Common generic args
-        account_id: str | None = None,
-        tags: Dict[str, str] | None = None,
-        # Data to append/merge
-        users: Optional[List[Any]] = None,
-        roles: Optional[List[Any]] = None,
-        services: Optional[List[Any]] = None,
-        vulnerabilities: Optional[List[Any]] = None,
-        # Catch-all for provider specific args (e.g. partition, arn for AWS)
-        **kwargs: Any,
-    ) -> bool:
-        """
-        Adds or Updates a Cloud Account.
-        If the account exists, it appends the provided users/services/roles.
-        """
-
-        # 1. Determine the Class based on type
-        TargetClass = None
-        if cloud_type.upper() == "AWS":
-            TargetClass = AWSAccount
-        # elif cloud_type.upper() == "GCP":
-        #     TargetClass = GCPAccount
-        else:
-            log.error(f"Unsupported Cloud Type: {cloud_type}")
-            return False
-
-        # 2. Check if account already exists (by account_id or name)
-        existing_acc = None
-        for acc in self.cloud_accounts:
-            # Check type match first
-            if not isinstance(acc, TargetClass):
-                continue
-
-            # Match by ID if present, otherwise by Name
-            if account_id and getattr(acc, "account_id", None) == account_id:
-                existing_acc = acc
-                break
-            elif acc.name == name:
-                existing_acc = acc
-                break
-
-        # 3. Update Existing Account
-        if existing_acc:
-            log.info(f"Updating existing {cloud_type} account: {name}")
-
-            # Update simple fields if they are not empty
-            if description:
-                existing_acc.description = description
-            if tags and hasattr(existing_acc, "tags"):
-                if existing_acc.tags is None:
-                    existing_acc.tags = {}
-                existing_acc.tags.update(tags)
-
-            # Merge Lists (Append Only)
-            # This assumes the underlying classes (AWSUser, etc.) have proper __eq__ checks
-            # or rely on object identity if they are reused.
-            if hasattr(existing_acc, "users") and users:
-                self._merge_lists(existing_acc.users, users)
-
-            if hasattr(existing_acc, "roles") and roles:  # Generic roles
-                self._merge_lists(existing_acc.roles, roles)
-
-            if (
-                hasattr(existing_acc, "iamroles") and "iamroles" in kwargs
-            ):  # AWS Specific
-                self._merge_lists(existing_acc.iamroles, kwargs["iamroles"])
-
-            if hasattr(existing_acc, "services") and services:
-                self._merge_lists(existing_acc.services, services)
-
-            if hasattr(existing_acc, "vulnerabilities") and vulnerabilities:
-                self._merge_lists(existing_acc.vulnerabilities, vulnerabilities)
-
-            return True
-
-        # 4. Create New Account
-        else:
-            log.info(f"Creating new {cloud_type} account: {name}")
-
-            # Construct arguments for the specific class
-            # We filter kwargs to ensure we don't pass 'type' if the class doesn't want it,
-            # but usually passing **kwargs to init is fine if the class handles it.
-            try:
-                if cloud_type.upper() == "AWS":
-                    # AWSAccount specific signature mapping
-                    new_acc = AWSAccount(
-                        name=name,
-                        description=description,
-                        account_id=account_id,
-                        tags=tags,
-                        users=users,
-                        services=services,
-                        vulnerabilities=vulnerabilities,
-                        roles=roles,
-                        **kwargs,  # Passes arn, partition, iamusers, etc.
-                    )
-                else:
-                    # Generic Fallback
-                    new_acc = TargetClass(
-                        name=name,
-                        description=description,
-                        account_id=account_id,
-                        **kwargs,
-                    )
-
-                self.cloud_accounts.append(new_acc)
-                return True
-            except Exception as e:
-                log.error(f"Failed to create cloud account: {e}")
-                return False
 
     def delCloudAccount(self, id_or_name: str) -> bool:
         """Delete a Cloud Account by account_id or name."""
