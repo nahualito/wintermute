@@ -36,6 +36,7 @@ dependencies = [
   "groq",
   "mcp",
   "asyncio",
+  "pytest-asyncio",
 ]
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
@@ -144,6 +145,8 @@ ignore_missing_imports = true
 addopts = "-q"
 minversion = "6.0"
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 src = ["wintermute", "tests"]
