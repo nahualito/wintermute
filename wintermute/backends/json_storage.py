@@ -83,7 +83,7 @@ class JsonFileBackend:
         path = self._get_path(operation_id)
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, default=str)
+                json.dump(data, f, default=str)
             return True
         except Exception as e:
             log.error(f"Error saving to {path}: {e}")

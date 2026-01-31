@@ -34,6 +34,8 @@ dependencies = [
   "boto3-stubs",
   "openai",
   "groq",
+  "mcp",
+  "asyncio",
 ]
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]

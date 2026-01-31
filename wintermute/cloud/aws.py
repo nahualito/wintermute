@@ -213,7 +213,7 @@ class AWSAccount(CloudAccount):
             roles = roles or data.get("roles")
 
             log.warning(
-                f"Self-Corrected AWSAccount initialization for: {name} (ID: {account_id})"
+                f"Self-Corrected AWS Account initialization for: {name} (ID: {account_id})"
             )
         # --- DEFENSIVE FIX END ---
 
@@ -235,7 +235,7 @@ class AWSAccount(CloudAccount):
         self.iamroles: List[IAMRole] = _load_list(iamroles, IAMRole)
         self.services: List[AWSService] = _load_list(services, AWSService)
 
-        log.info(f"AWSAccount initialized: {self.account_id} - {self.name}")
+        log.debug(f"AWS Account initialized: {self.account_id} - {self.name}")
 
     # Optional: convenience
     @property
@@ -287,16 +287,16 @@ class AWSAccount(CloudAccount):
         if risk:
             v.setRisk(**risk)
             log.debug(
-                f"Set risk for Vulnerability {v.title} in AWSAccount {self.account_id}: {risk}"
+                f"Set risk for Vulnerability {v.title} in AWS Account {self.account_id}: {risk}"
             )
         if v not in self.vulnerabilities:
             self.vulnerabilities.append(v)
             log.info(
-                f"Vulnerability {v.title} added to AWSAccount {self.account_id}: {title}"
+                f"Vulnerability {v.title} added to AWS Account {self.account_id}: {title}"
             )
             return True
         log.warning(
-            f"Vulnerability {v.title} not added to AWSAccount {self.account_id}: duplicate found"
+            f"Vulnerability {v.title} not added to AWS Account {self.account_id}: duplicate found"
         )
         return False
 
@@ -307,7 +307,7 @@ class AWSAccount(CloudAccount):
         attached_policies: List[str] = [],
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
-        log.info(f"Adding AWS User {username} to AWSAccount {self.account_id}")
+        log.info(f"Adding AWS User {username} to AWS Account {self.account_id}")
         # We assume attached_policies defaults to empty list in the dataclass if None passed
         return self._add_component(
             self.users,
@@ -326,7 +326,7 @@ class AWSAccount(CloudAccount):
         attached_policies: List[str] = [],
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
-        log.info(f"Adding IAM User {username} to AWSAccount {self.account_id}")
+        log.info(f"Adding IAM User {username} to AWS Account {self.account_id}")
         return self._add_component(
             self.iamusers,
             IAMUser,
@@ -345,7 +345,7 @@ class AWSAccount(CloudAccount):
         attached_policies: List[str] = [],
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
-        log.info(f"Adding IAM Role {role_name} to AWSAccount {self.account_id}")
+        log.info(f"Adding IAM Role {role_name} to AWS Account {self.account_id}")
         return self._add_component(
             self.iamroles,
             IAMRole,
@@ -364,7 +364,9 @@ class AWSAccount(CloudAccount):
         config: Dict[str, Any] = {},
         custom_properties: Dict[str, Any] = {},
     ) -> bool:
-        log.info(f"Adding AWS Service {name} to AWSAccount {self.account_id}")
+        log.info(
+            f"Adding {service_type} AWS Service {name} to AWS Account {self.account_id}"
+        )
         return self._add_component(
             self.services,
             AWSService,

@@ -23,60 +23,66 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal, Optional
+from typing import Any, Iterable, List, Optional
 
 import boto3
+from botocore.exceptions import ClientError
 
 from ..provider import LLMProvider, ModelInfo
-from ..types import ChatRequest, ChatResponse, Message
+from ..types import ChatRequest, ChatResponse, ToolCall, ToolSpec
 
 
-def _as_bedrock_messages(msgs: list[Message]) -> list[dict[str, object]]:
-    # Claude Messages API via Bedrock: roles are "user" or "assistant".
-    out: list[dict[str, object]] = []
-    for m in msgs:
-        role = "assistant" if m.role == "assistant" else "user"  # map system->user
-        out.append({"role": role, "content": [{"type": "text", "text": m.content}]})
-    return out
+def _convert_tools_to_converse_spec(tools: Iterable[ToolSpec]) -> List[dict[str, Any]]:
+    """Converts Wintermute ToolSpecs to Bedrock Converse 'toolSpec' format."""
+    return [
+        {
+            "toolSpec": {
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": {"json": t.input_schema},
+            }
+        }
+        for t in tools
+    ]
 
 
-_ModelFamily = Literal["anthropic", "deepseek", "llama", "other"]
+def _parse_converse_response(
+    output_message: dict[str, Any],
+) -> tuple[str, list[ToolCall]]:
+    """Parses the unified Converse API response into content and tool calls."""
+    content_blocks = output_message.get("content", [])
+    text_parts = []
+    tool_calls = []
 
+    for block in content_blocks:
+        if "text" in block:
+            text_parts.append(block["text"])
+        elif "toolUse" in block:
+            t_use = block["toolUse"]
+            tool_calls.append(
+                ToolCall(
+                    id=t_use["toolUseId"],
+                    name=t_use["name"],
+                    arguments=t_use["input"],
+                )
+            )
 
-def _detect_family(model_id: str) -> _ModelFamily:
-    mid = model_id.lower()
-    if "anthropic" in mid or "claude" in mid:
-        return "anthropic"
-    if mid.startswith("us.deepseek.") or "deepseek" in mid:
-        return "deepseek"
-    if "llama" in mid or "meta.llama" in mid or "llama3" in mid:
-        return "llama"
-    return "other"
+    return "".join(text_parts), tool_calls
 
 
 @dataclass
 class BedrockProvider(LLMProvider):
-    """Amazon Bedrock LLM Provider.
-
-    Example Bedrock models include Anthropic Claude, DeepSeek-R1, and Meta Llama.
-
-    Example:
-        >>> from wintermute.ai.providers.bedrock_provider import BedrockProvider
-        >>> bedrock = BedrockProvider(region="us-east-1")
-        >>> response = bedrock.chat(ChatRequest(...))
-
-    Attributes:
-        region (str): AWS region where Bedrock is available.
-        default_model (str): Default model ID to use if none specified.
+    """
+    Amazon Bedrock LLM Provider using the unified Converse API.
+    Supports Claude, Llama, Mistral, and Nova with a single code path.
     """
 
     region: str = "us-east-1"
-    # Make sure this is enabled for your account/region
     default_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     _name: str = "bedrock"
 
@@ -85,154 +91,112 @@ class BedrockProvider(LLMProvider):
         return self._name
 
     def list_models(self) -> list[ModelInfo]:
-        # Include one Anthropic (Claude), one DeepSeek (inference profile), one Llama
+        # With Converse API, most modern models support tools.
         return [
             ModelInfo(
                 name="anthropic.claude-3-5-sonnet-20240620-v1:0",
                 family="claude-3-5",
                 context_window=200_000,
-                supports_tools=False,
+                supports_tools=True,
                 supports_json=True,
                 supports_stream=True,
             ),
-            # DeepSeek is invoked via an **inference profile** (note the 'us.' prefix)
             ModelInfo(
-                name="us.deepseek.r1-v1:0",
+                name="us.deepseek.r1-v1:0",  # Check availability in your region
                 family="deepseek-r1",
-                context_window=200_000,
-                supports_tools=False,
+                context_window=128_000,
+                supports_tools=True,  # Converse tries to map this; might fallback if unsupported
                 supports_json=True,
                 supports_stream=True,
             ),
-            # Example Llama model ID (ensure access in your region)
             ModelInfo(
-                name="meta.llama3-8b-instruct-v1:0",
+                name="meta.llama3-1-70b-instruct-v1:0",
                 family="llama3",
                 context_window=128_000,
-                supports_tools=False,
+                supports_tools=True,
                 supports_json=True,
                 supports_stream=True,
             ),
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
-        client: Any = boto3.client("bedrock-runtime", region_name=self.region)
+        client = boto3.client("bedrock-runtime", region_name=self.region)
         model_id = req.model or self.default_model
-        family = _detect_family(model_id)
 
-        # ----- Build body per model family (keys must match AWS docs) -----
-        if family == "anthropic":
-            # Claude via Messages API
-            body_obj: dict[str, Any] = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "messages": _as_bedrock_messages(req.messages),
-                "temperature": float(req.temperature),
-                "max_tokens": req.max_tokens if req.max_tokens is not None else 1024,
-            }
-        elif family == "deepseek":
-            # DeepSeek-R1: text completion schema
-            # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
-            prompt = req.messages[-1].content if req.messages else ""
-            body_obj = {
-                "prompt": prompt,
-                "temperature": float(req.temperature),
-                "top_p": 0.9,
-                "max_tokens": req.max_tokens if req.max_tokens is not None else 1024,
-                # "stop": []  # optional list of strings
-            }
-        elif family == "llama":
-            # Meta Llama Instruct: prompt + max_gen_len (NO max_tokens)
-            # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-meta.html
-            user_text = req.messages[-1].content if req.messages else ""
-            # Llama works best when wrapped in its header format; not strictly required but recommended.
-            prompt = (
-                "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n"
-                f"{user_text}\n"
-                "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
-            )
-            body_obj = {
-                "prompt": prompt,
-                "temperature": float(req.temperature),
-                "top_p": 0.9,
-                "max_gen_len": req.max_tokens if req.max_tokens is not None else 512,
-            }
-        else:
-            # Generic fallback: simple prompt-only schema that many providers accept
-            prompt = req.messages[-1].content if req.messages else ""
-            body_obj = {
-                "prompt": prompt,
-                "temperature": float(req.temperature),
-                "top_p": 0.9,
-                "max_tokens": req.max_tokens if req.max_tokens is not None else 512,
+        # 1. Separate System Prompts (Converse API requires this)
+        system_prompts = []
+        messages = []
+
+        for m in req.messages:
+            if m.role == "system":
+                system_prompts.append({"text": m.content})
+            else:
+                # Map Wintermute roles to Bedrock Converse roles
+                # User -> user, Assistant -> assistant, Tool -> user (with toolResult)
+                role = "assistant" if m.role == "assistant" else "user"
+
+                # Simple text content handling
+                # (For robust tool result handling, Wintermute Message types would need
+                #  to support 'tool_result' blocks. For now we treat them as text.)
+                messages.append({"role": role, "content": [{"text": m.content}]})
+
+        # 2. Configure Tools
+        tool_config = None
+        if req.tools:
+            tool_config = {
+                "tools": _convert_tools_to_converse_spec(req.tools),
+                "toolChoice": (
+                    {"auto": {}}
+                    if req.tool_choice == "auto"
+                    else {"any": {}}
+                    if req.tool_choice == "required"
+                    else {"auto": {}}  # Default
+                ),
             }
 
-        body_bytes = json.dumps(body_obj).encode("utf-8")
-
-        # ----- Invoke -----
+        # 3. Call Bedrock Converse
         start = time.time()
         try:
-            resp = client.invoke_model(
-                modelId=model_id,
-                body=body_bytes,
-                contentType="application/json",
-                accept="application/json",
-            )
-        except Exception as e:
-            raise RuntimeError(
-                f"Bedrock invoke_model failed: {e}\nRequest body: {json.dumps(body_obj)}"
-            ) from e
+            # Build arguments dictionary to handle optional params cleanly
+            kwargs = {
+                "modelId": model_id,
+                "messages": messages,
+                "inferenceConfig": {
+                    "temperature": float(req.temperature),
+                    "maxTokens": req.max_tokens or 1024,
+                },
+            }
+            if system_prompts:
+                kwargs["system"] = system_prompts
+            if tool_config:
+                kwargs["toolConfig"] = tool_config
 
-        payload = resp["body"].read().decode("utf-8")
-        j: Any = json.loads(payload)
+            response = client.converse(**kwargs)
 
-        # ----- Parse response by family -----
-        text = ""
-        usage: dict[Any, Any] = {}
-        if family == "anthropic":
-            # Claude Messages: { "content": [ {"text": "..."} ], "usage": {...} }
-            parts = j.get("content") or []
-            if isinstance(parts, list) and parts and isinstance(parts[0], dict):
-                text = str(parts[0].get("text", ""))
-            usage = j.get("usage", {}) if isinstance(j.get("usage", {}), dict) else {}
-        elif family == "deepseek":
-            # DeepSeek: { "choices": [ { "text": "...", "stop_reason": "..." } ] }
-            choices = j.get("choices") or []
-            if isinstance(choices, list) and choices:
-                text = str(choices[0].get("text", ""))
-            # usage may be absent
-        elif family == "llama":
-            # Llama 3/3.1/3.2/4 Instruct can return various shapes; primary is "generation"
-            if "generation" in j:
-                text = str(j.get("generation", ""))
-            elif "outputs" in j and isinstance(j["outputs"], list) and j["outputs"]:
-                text = str(j["outputs"][0].get("text", ""))
-            elif "choices" in j and isinstance(j["choices"], list) and j["choices"]:
-                text = str(j["choices"][0].get("text", ""))
-            elif "text" in j:
-                text = str(j.get("text", ""))
-            # usage fields differ; omit unless clearly present
-        else:
-            # Fallbacks seen in the wild
-            text = str(j.get("outputText", j.get("generation", j.get("text", ""))))
+        except ClientError as e:
+            raise RuntimeError(f"Bedrock Converse failed: {e}") from e
 
+        # 4. Parse Response
+        output_msg = response["output"]["message"]
+        content_text, tool_calls = _parse_converse_response(output_msg)
+
+        usage = response.get("usage", {})
         latency = int((time.time() - start) * 1000)
 
         return ChatResponse(
-            content=text,
+            content=content_text,
+            tool_calls=tool_calls,
             model=model_id,
             provider=self.name,
-            prompt_tokens=usage.get("input_tokens")
-            if isinstance(usage, dict)
-            else None,
-            completion_tokens=usage.get("output_tokens")
-            if isinstance(usage, dict)
-            else None,
+            prompt_tokens=usage.get("inputTokens"),
+            completion_tokens=usage.get("outputTokens"),
             latency_ms=latency,
         )
 
     def embed(
         self, texts: Iterable[str], model: Optional[str] = None
     ) -> list[list[float]]:
+        # Stub
         return [[0.0] * 1024 for _ in texts]
 
     def count_tokens(self, text: str, model: Optional[str] = None) -> int:
