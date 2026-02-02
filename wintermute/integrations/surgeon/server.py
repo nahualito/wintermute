@@ -25,165 +25,243 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List
 
 from mcp.server.fastmcp import FastMCP
 
-# Initialize the MCP Server
+# Initialize
 mcp = FastMCP("SurgeonMCP")
 
-# Configuration: Point this to your SURGEON root directory
-SURGEON_ROOT = os.getenv("SURGEON_ROOT", "/home/nahual/projects/HAL/SURGEON")
-FIRMWARE_DIR = Path(SURGEON_ROOT) / "firmware"
+# Config
+SURGEON_ROOT = Path(os.getenv("SURGEON_ROOT", "/home/nahual/projects/HAL/SURGEON"))
+FIRMWARE_DIR = SURGEON_ROOT / "firmware"
 
 
-def _run_command(command: List[str], cwd: str = SURGEON_ROOT) -> str:
-    """Helper to run shell commands and return output."""
+def _run(cmd: List[str], cwd: Path = SURGEON_ROOT) -> str:
     try:
-        result = subprocess.run(
-            command, cwd=cwd, check=True, capture_output=True, text=True
-        )
-        return result.stdout
+        res = subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
+        return res.stdout
     except subprocess.CalledProcessError as e:
-        return f"Error executing command: {' '.join(command)}\nstderr: {e.stderr}\nstdout: {e.stdout}"
-
-
-@mcp.tool()
-async def list_firmware() -> str:
-    """
-    Lists available firmware projects in the SURGEON firmware directory.
-    Useful for the AI to know what targets are available.
-    """
-    if not FIRMWARE_DIR.exists():
-        return "Error: Firmware directory not found."
-
-    projects = [f.name for f in FIRMWARE_DIR.iterdir() if f.is_dir()]
-    return json.dumps(projects, indent=2)
-
-
-@mcp.tool()
-async def analyze_firmware(
-    firmware_subpath: str, script_type: str = "basic_blocks"
-) -> str:
-    """
-    Runs Ghidra analysis scripts on the target firmware to extract CFG or Symbols.
-
-    Args:
-        firmware_subpath: Relative path to firmware inside the 'firmware' folder (e.g., 'p2im/cnc').
-        script_type: Either 'basic_blocks' or 'symbols'.
-    """
-    # Note: In a real deployment, this would trigger the docker/ghidrathon-entrypoint.sh
-    # mapped to the specific script. This is a simplified wrapper around the manual step.
-
-    script_map = {
-        "basic_blocks": "src/ghidrathon/basic_blocks.py",
-        "symbols": "src/ghidra_scripts/get_symbols.py",  # Hypothetical script based on file list
-    }
-
-    if script_type not in script_map:
-        return f"Unknown script type: {script_type}. Options: basic_blocks, symbols"
-
-    # Construct the command to run the analyzer container
-    # This assumes the user has set up a helper script or directly calls docker
-    # For this example, we wrap the 'make' command if a specific target exists,
-    # or fall back to a direct docker run command pattern used in SURGEON.
-
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        f"{SURGEON_ROOT}:/surgeon",
-        "ghidrathon",  # Assumes you built the helper image
-        "python3",
-        script_map[script_type],
-        f"/surgeon/firmware/{firmware_subpath}",
-    ]
-
-    return _run_command(cmd)
+        return f"CMD Failed: {' '.join(cmd)}\nSTDERR: {e.stderr}"
 
 
 @mcp.tool()
 async def create_hook_skeleton(
-    firmware_name: str, peripheral_name: str, address_base: str
+    firmware_name: str,
+    peripheral_name: str,
+    address_base: str,
+    peripheral_type: str = "GENERIC",
+    malicious_snippet: str = "// No malicious payload injected",
 ) -> str:
     """
-    Creates a C file skeleton for a new peripheral hook in src/runtime/handlers.
+    Generates a C-based emulation hook for a specific peripheral type.
 
     Args:
-        firmware_name: Name of the firmware folder (e.g., 'my_radio').
-        peripheral_name: Name of the peripheral (e.g., 'uart_custom').
-        address_base: Hex string of the base address (e.g., '0x40001000').
+        firmware_name: Target firmware folder.
+        peripheral_name: Name of the peripheral (e.g., 'wifi_chip').
+        address_base: Base address hex string (e.g., '0x40001000').
+        peripheral_type: One of [UART, WIFI, BLUETOOTH, ETHERNET, USB, PCIE, JTAG, TPM].
+        malicious_snippet: C code to inject for fault injection or fuzzing.
+                           Example: "*val = 0xFFFFFFFF; // Integer overflow attack"
     """
     handler_dir = Path(SURGEON_ROOT) / "src" / "runtime" / "handlers" / firmware_name
     handler_dir.mkdir(parents=True, exist_ok=True)
-
     file_path = handler_dir / f"{peripheral_name}.c"
 
+    ptype = peripheral_type.upper()
+
+    # --- 1. Define The Logic Templates (C Code) ---
+
+    if ptype in ["WIFI", "BLUETOOTH", "ZIGBEE"]:
+        # SDR MODE: Treat writes as "Transmits" and reads as "Receives"
+        body = f"""
+    // --- {ptype} SDR Emulation (Radio Abstraction) ---
+    uint32_t offset = addr - {address_base};
+    
+    // Offset 0x00: Status Register
+    // Offset 0x04: TX Buffer (Firmware writes here to send)
+    // Offset 0x08: RX Buffer (Firmware reads here to receive)
+    
+    if (offset == 0x04) {{
+        printf("[{peripheral_name}] [TX-RADIO] Packet Broadcast: 0x%08x\\n", val);
+        // MALICIOUS HOOK: Intercept outbound traffic?
+    }}
+    else if (offset == 0x08) {{
+        // MALICIOUS HOOK: Inject Inbound Radio Attack
+        {malicious_snippet}
+        
+        if (*val == 0) {{
+             *val = 0xDEADBEEF; // Default "noise" on the air
+        }}
+        printf("[{peripheral_name}] [RX-RADIO] Firmware read radio data: 0x%08x\\n", *val);
+    }}
+    else {{
+        *val = 1; // Always Ready status
+    }}
+        """
+
+    elif ptype == "ETHERNET":
+        body = f"""
+    // --- Ethernet MAC Emulation ---
+    uint32_t offset = addr - {address_base};
+    
+    if (offset == 0x00) {{ // MAC Control Register
+        printf("[{peripheral_name}] MAC Config Write: 0x%08x\\n", val);
+    }}
+    else if (offset >= 0x100 && offset < 0x200) {{ // RX Descriptor Ring
+        // MALICIOUS HOOK: Buffer Overflow via huge packet size?
+        {malicious_snippet}
+        printf("[{peripheral_name}] RX Descriptor Access\\n");
+    }}
+        """
+
+    elif ptype == "USB":
+        body = f"""
+    // --- USB Endpoint Emulation ---
+    uint32_t offset = addr - {address_base};
+    
+    // Emulate Endpoint 0 (Control) setup packets
+    if (offset == 0x00) {{
+        printf("[{peripheral_name}] USB EP0 Setup\\n");
+        // MALICIOUS HOOK: Fuzzing USB Descriptor responses
+        {malicious_snippet}
+    }}
+        """
+
+    elif ptype == "JTAG":
+        body = f"""
+    // --- JTAG TAP Controller Spy ---
+    // We don't emulate the chain, we just log the activity to find debug backdoors.
+    
+    if (val & 0x1) printf("[{peripheral_name}] TMS High\\n");
+    if (val & 0x2) printf("[{peripheral_name}] TCK Clock\\n");
+    
+    // MALICIOUS HOOK: Unlock Debug Interface?
+    {malicious_snippet}
+        """
+
+    elif ptype == "PCIE":
+        body = f"""
+    // --- PCIe Config Space ---
+    uint32_t offset = addr - {address_base};
+    
+    // Vendor ID / Device ID at 0x00
+    if (offset == 0x00) {{
+        *val = 0x80868086; // Fake Intel ID
+        printf("[{peripheral_name}] PCIe ID Read\\n");
+    }}
+    // MALICIOUS HOOK: DMA Attack emulation
+    {malicious_snippet}
+        """
+
+    else:
+        # UART / Generic
+        body = f"""
+    // --- Generic / UART Emulation ---
+    uint32_t offset = addr - {address_base};
+    if (offset == 0x04) {{
+        printf("%c", (char)(val & 0xFF)); // Print UART output to console
+    }}
+    // MALICIOUS HOOK: Fault Injection
+    {malicious_snippet}
+        """
+
+    # --- 2. Construct Final C File ---
+
     c_content = f"""
+/* AUTOMATICALLY GENERATED BY SURGEON AGENT */
 #include "surgeon/emu_handler.h"
 #include <stdio.h>
 
-// Hook for {peripheral_name} at {address_base}
+// Hook for {peripheral_name} ({ptype}) at {address_base}
 
 bool {peripheral_name}_read_hook(struct emu_state *state, uint32_t pc, uint32_t addr, uint32_t *val, uint32_t size) {{
-    printf("[{peripheral_name}] Read access at 0x%08x\\n", addr);
-    *val = 0; // Default return 0
+    {body}
     return true;
 }}
 
 bool {peripheral_name}_write_hook(struct emu_state *state, uint32_t pc, uint32_t addr, uint32_t val, uint32_t size) {{
-    printf("[{peripheral_name}] Write access at 0x%08x: 0x%08x\\n", addr, val);
+    {body}
     return true;
 }}
-
-// TODO: Register this hook in your config.yaml or main handler registry
     """
 
     with open(file_path, "w") as f:
         f.write(c_content)
 
-    return f"Created hook skeleton at {file_path}. Please implement specific logic and register in config."
+    return f"Created {ptype} hook at {file_path} with malicious payload size: {len(malicious_snippet)} bytes."
 
 
 @mcp.tool()
-async def build_instrumented_firmware(firmware_subpath: str) -> str:
-    """
-    Runs the SURGEON build process (Autogen -> Compile Runtime -> Rewrite Binary).
+async def list_firmware_symbols(firmware_subpath: str) -> str:
+    """Lists function symbols in an ELF file. Essential for finding hook addresses."""
+    elf_path = FIRMWARE_DIR / firmware_subpath
+    if not elf_path.exists():
+        return "Error: ELF file not found."
 
-    Args:
-        firmware_subpath: Relative path (e.g., 'p2im/cnc').
-    """
-    # SURGEON uses a Makefile at the root
-    cmd = ["make", "build", f"FIRMWARE={firmware_subpath}"]
-    return _run_command(cmd)
+    # Try generic nm, then cross-compile nm
+    nm_bin = "nm"
+    if shutil.which("arm-none-eabi-nm"):
+        nm_bin = "arm-none-eabi-nm"
+
+    try:
+        # -n: sort numeric, -C: demangle, --defined-only
+        output = subprocess.check_output(
+            [nm_bin, "-n", "-C", "--defined-only", str(elf_path)], text=True
+        )
+        symbols = []
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[1].upper() in ("T", "t"):
+                symbols.append({"addr": f"0x{parts[0]}", "name": " ".join(parts[2:])})
+        return (
+            json.dumps(symbols[:200], indent=2) + f"\n... ({len(symbols) - 200} more)"
+        )
+    except Exception as e:
+        return f"Error running nm: {e}"
 
 
 @mcp.tool()
-async def start_fuzzing(firmware_subpath: str, duration_seconds: int = 86400) -> str:
-    """
-    Starts the AFL++ fuzzing campaign in a Docker container.
+async def write_config_file(rel_path: str, content: str) -> str:
+    """Writes a configuration file (like YAML) to the SURGEON directory."""
+    full_path = SURGEON_ROOT / rel_path
+    try:
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(full_path, "w") as f:
+            f.write(content)
+        return f"Wrote {len(content)} bytes to {rel_path}"
+    except Exception as e:
+        return f"Error writing file: {e}"
 
-    Args:
-        firmware_subpath: Relative path (e.g., 'p2im/cnc').
-        duration_seconds: How long to run (default 24h). Note: SURGEON defaults to 24h in Makefile.
-    """
-    # We use run-fuzz target from the Makefile
-    cmd = ["make", "run-fuzz", f"FIRMWARE={firmware_subpath}"]
 
-    # We run this async/detached in a real scenario, but for MCP we returns the startup log
-    return _run_command(cmd)
+# --- High Level Workflow Tools (From user's server.py) ---
 
 
 @mcp.tool()
-async def check_fuzzing_status(container_name: str) -> str:
-    """
-    Checks the logs or status of a running fuzzing container.
-    """
-    cmd = ["docker", "logs", "--tail", "20", container_name]
-    return _run_command(cmd)
+async def build_firmware(firmware_name: str) -> str:
+    """Runs 'make build FIRMWARE=name'. Compiles the instrumented binary."""
+    return _run(["make", "build", f"FIRMWARE={firmware_name}"])
+
+
+@mcp.tool()
+async def start_fuzzing(firmware_name: str) -> str:
+    """Runs 'make run-fuzz FIRMWARE=name'. Starts the AFL++ docker container."""
+    # We define a timeout or run detached in production.
+    # For now, we return the startup output.
+    return _run(["make", "run-fuzz", f"FIRMWARE={firmware_name}"])
+
+
+@mcp.tool()
+async def get_fuzzer_stats(firmware_name: str) -> str:
+    """Reads the fuzzer_stats file from the AFL output directory."""
+    stats_file = FIRMWARE_DIR / firmware_name / "fuzz_out" / "default" / "fuzzer_stats"
+    if not stats_file.exists():
+        return "Fuzzer stats not found. Is the fuzzer running?"
+    with open(stats_file, "r") as f:
+        return f.read()
 
 
 if __name__ == "__main__":
