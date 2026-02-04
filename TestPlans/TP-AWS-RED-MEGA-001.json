@@ -1,0 +1,482 @@
+{
+  "code": "TP-AWS-RED-MEGA-001",
+  "name": "Granular AWS Red Team Operation (Scanner & Burp Integration)",
+  "description": "A highly detailed, granular testing plan. It decomposes general audit steps into specific Test Cases, integrates open-source scanners (Prowler, ScoutSuite, Nuclei), and adds Burp Suite API testing workflows for Lambda/API Gateway.",
+  "test_cases": [
+    {
+      "code": "AWS-OSINT-RECON-001",
+      "name": "External Asset Discovery (OSINT)",
+      "description": "Map the external attack surface using open source reconnaissance tools.",
+      "execution_mode": "once",
+      "target_scope": {
+        "tags": ["recon", "osint"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "attacker_machine",
+            "cardinality": "one",
+            "where": { "hostname": "attacker_machine" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Cloud Enum Enumeration",
+          "description": "Run cloud_enum to identify public S3 buckets, Azure blobs, and GCP buckets associated with the target.",
+          "tool": "cloud_enum",
+          "action": "execute",
+          "arguments": ["-k <TARGET_KEYWORD>", "-l permutations.txt"]
+        },
+        {
+          "title": "Nuclei Public Scan",
+          "description": "Run Nuclei templates against discovered endpoints to identify low-hanging vulnerabilities.",
+          "tool": "nuclei",
+          "action": "execute",
+          "arguments": ["-t cloud/aws", "-u <TARGET_DOMAIN>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-CONFIG-AUDIT-001",
+      "name": "Comprehensive Configuration Audit (Prowler)",
+      "description": "Execute Prowler to baseline the account against CIS benchmarks and security best practices.",
+      "execution_mode": "once",
+      "target_scope": {
+        "tags": ["audit", "compliance"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "attacker_machine",
+            "cardinality": "one",
+            "where": { "hostname": "attacker_machine" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Prowler Full Scan",
+          "description": "Execute Prowler from the attacker machine against the target credentials.",
+          "tool": "prowler",
+          "action": "execute",
+          "arguments": [
+            "aws",
+            "--services",
+            "s3",
+            "ec2",
+            "iam",
+            "lambda",
+            "--severity",
+            "critical",
+            "high"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-CONFIG-AUDIT-002",
+      "name": "Multi-Cloud Visual Audit (ScoutSuite)",
+      "description": "Generate a visual HTML report of the attack surface using ScoutSuite.",
+      "execution_mode": "once",
+      "target_scope": {
+        "tags": ["audit", "visual"],
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "attacker_machine",
+            "cardinality": "one",
+            "where": { "hostname": "attacker_machine" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "ScoutSuite Execution",
+          "description": "Run ScoutSuite to gather configuration data and generate the attack surface report.",
+          "tool": "scoutsuite",
+          "action": "execute",
+          "arguments": ["aws"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-IAM-ENUM-001",
+      "name": "IAM User Permission Bruteforce",
+      "description": "Determine effective permissions for an IAM user when 'iam:GetUserPolicy' is denied.",
+      "execution_mode": "per_binding",
+      "execution_binding": "iam_user",
+      "target_scope": {
+        "tags": ["iam", "enumeration"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "iam_user",
+            "cardinality": "many",
+            "where": { "cloud_type": "AWS" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Pacu Permissions Enumeration",
+          "description": "Use Pacu's 'iam__enum_permissions' module to brute-force API calls.",
+          "tool": "pacu",
+          "action": "execute",
+          "arguments": ["run iam__enum_permissions"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-IAM-PRIVESC-001",
+      "name": "IAM Privilege Escalation Check",
+      "description": "Test for specific privilege escalation vectors (PassRole, Glue, etc.).",
+      "execution_mode": "per_binding",
+      "execution_binding": "iam_user",
+      "target_scope": {
+        "tags": ["iam", "privesc"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "iam_user",
+            "cardinality": "many",
+            "where": { "cloud_type": "AWS" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Pacu PrivEsc Scan",
+          "description": "Run the automated privilege escalation scanner in Pacu.",
+          "tool": "pacu",
+          "action": "execute",
+          "arguments": ["run iam__privesc_scan"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-LAMBDA-API-BURP-001",
+      "name": "Lambda API Gateway Fuzzing (Burp Suite)",
+      "description": "Test Lambda functions exposed via API Gateway for injection vulnerabilities using Burp Suite.",
+      "execution_mode": "per_binding",
+      "execution_binding": "lambda_svc",
+      "target_scope": {
+        "tags": ["lambda", "api", "burp"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "lambda_svc",
+            "cardinality": "many",
+            "where": { "service_type": "lambda" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Burp Proxy Interception",
+          "description": "Configure browser/CLI to route traffic through Burp Proxy. Intercept a valid request to the Lambda URL.",
+          "tool": "burp-suite",
+          "action": "intercept",
+          "arguments": ["proxy-listener: 127.0.0.1:8080"]
+        },
+        {
+          "title": "Input Fuzzing (Intruder)",
+          "description": "Send the request to Intruder. Fuzz JSON parameters and query strings with SQLi and Command Injection wordlists.",
+          "tool": "burp-suite",
+          "action": "fuzz",
+          "arguments": ["payloads: Seclists/Fuzzing/SQLi"]
+        },
+        {
+          "title": "OS Command Injection Test",
+          "description": "Specifically test for command injection (e.g., `; id`, `| cat /etc/passwd`) in input fields handled by the Lambda runtime.",
+          "tool": "burp-suite",
+          "action": "repeater"
+        }
+      ]
+    },
+    {
+      "code": "AWS-LAMBDA-URL-SCAN-001",
+      "name": "Lambda Function URL Auth Scan",
+      "description": "Check if the Lambda Function URL allows unauthenticated access ('AuthType: NONE').",
+      "execution_mode": "per_binding",
+      "execution_binding": "lambda_svc",
+      "target_scope": {
+        "tags": ["lambda", "auth"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "lambda_svc",
+            "cardinality": "many",
+            "where": { "service_type": "lambda" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "AuthType Verification",
+          "description": "Query the Function URL config.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["lambda get-function-url-config"]
+        },
+        {
+          "title": "Unauthenticated Curl",
+          "description": "Attempt to curl the endpoint if AuthType is NONE.",
+          "tool": "curl",
+          "action": "execute",
+          "arguments": ["-v", "<FUNCTION_URL>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-S3-PUBLIC-001",
+      "name": "S3 Public Access Verification",
+      "description": "Verify if the bucket allows access to 'AllUsers'.",
+      "execution_mode": "per_binding",
+      "execution_binding": "s3_bucket",
+      "target_scope": {
+        "tags": ["s3", "public"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "s3_bucket",
+            "cardinality": "many",
+            "where": { "service_type": "s3" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "S3Scanner Execution",
+          "description": "Run s3scanner to determine public read/write permissions.",
+          "tool": "s3scanner",
+          "action": "execute",
+          "arguments": ["scan", "--bucket", "<BUCKET_NAME>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-S3-RANSOM-001",
+      "name": "S3 Data Destruction Test (Ransomware)",
+      "description": "Test the ability to permanently delete objects or versions.",
+      "execution_mode": "per_binding",
+      "execution_binding": "s3_bucket",
+      "target_scope": {
+        "tags": ["s3", "destructive"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "s3_bucket",
+            "cardinality": "many",
+            "where": { "service_type": "s3" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "DeleteVersion Check",
+          "description": "Attempt to delete a specific object version to bypass soft-delete protections.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["s3api delete-object", "--version-id"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-EC2-IMDS-001",
+      "name": "EC2 IMDS Exfiltration",
+      "description": "Exploit IMDSv1 to retrieve temporary IAM credentials.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ec2_inst",
+      "target_scope": {
+        "tags": ["ec2", "imds"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ec2_inst",
+            "cardinality": "many",
+            "where": { "service_type": "ec2" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "IMDSv1 Curl",
+          "description": "Curl the meta-data endpoint to retrieve role credentials.",
+          "tool": "curl",
+          "action": "execute",
+          "arguments": [
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-RDS-PUBLIC-001",
+      "name": "RDS Public Snapshot Exposure",
+      "description": "Check if RDS snapshots are shared publicly.",
+      "execution_mode": "per_binding",
+      "execution_binding": "rds_db",
+      "target_scope": {
+        "tags": ["rds", "exposure"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "rds_db",
+            "cardinality": "many",
+            "where": { "service_type": "rds" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Describe Public Snapshots",
+          "description": "Filter snapshots for 'PubliclyAccessible' attributes.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["rds describe-db-snapshots", "--snapshot-type public"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-EKS-PUBLIC-001",
+      "name": "EKS Public API Endpoint Check",
+      "description": "Determine if the Kubernetes API server is open to the internet (0.0.0.0/0).",
+      "execution_mode": "per_binding",
+      "execution_binding": "eks_cluster",
+      "target_scope": {
+        "tags": ["eks", "public"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "eks_cluster",
+            "cardinality": "many",
+            "where": { "service_type": "eks" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Describe Cluster Endpoint",
+          "description": "Check 'endpointPublicAccess' and 'publicAccessCidrs' configuration.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["eks describe-cluster"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-EKS-HUNTER-001",
+      "name": "EKS Vulnerability Scan (Kube-hunter)",
+      "description": "Run kube-hunter against the cluster to identify misconfigurations.",
+      "execution_mode": "per_binding",
+      "execution_binding": "eks_cluster",
+      "target_scope": {
+        "tags": ["eks", "scan"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "eks_cluster",
+            "cardinality": "many",
+            "where": { "service_type": "eks" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Kube-hunter Execution",
+          "description": "Execute kube-hunter against the cluster endpoint.",
+          "tool": "kube-hunter",
+          "action": "execute",
+          "arguments": ["--remote", "<CLUSTER_ENDPOINT>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-REDSHIFT-PUBLIC-001",
+      "name": "Redshift Public Access Check",
+      "description": "Verify if the Redshift cluster allows public internet access.",
+      "execution_mode": "per_binding",
+      "execution_binding": "redshift_cluster",
+      "target_scope": {
+        "tags": ["redshift", "public"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "redshift_cluster",
+            "cardinality": "many",
+            "where": { "service_type": "other" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Describe Clusters Public",
+          "description": "Check 'PubliclyAccessible' flag and associated Security Groups.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["redshift describe-clusters"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-REDSHIFT-CREDS-001",
+      "name": "Redshift Credential Extraction",
+      "description": "Attempt to retrieve temporary cluster credentials via IAM.",
+      "execution_mode": "per_binding",
+      "execution_binding": "redshift_cluster",
+      "target_scope": {
+        "tags": ["redshift", "creds"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "redshift_cluster",
+            "cardinality": "many",
+            "where": { "service_type": "other" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Get Cluster Credentials",
+          "description": "Execute 'get-cluster-credentials' to obtain dbUser/dbPassword.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["redshift get-cluster-credentials"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-ROUTE53-DANGLING-001",
+      "name": "Route 53 Dangling Record Takeover",
+      "description": "Identify DNS records pointing to non-existent resources (Subdomain Takeover).",
+      "execution_mode": "per_binding",
+      "execution_binding": "r53_zone",
+      "target_scope": {
+        "tags": ["route53", "takeover"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "r53_zone",
+            "cardinality": "many",
+            "where": { "service_type": "other" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "List Resource Records",
+          "description": "Enumerate all records and cross-reference with active S3 buckets/IPs.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["route53 list-resource-record-sets"]
+        },
+        {
+          "title": "Nuclei DNS Takeover Scan",
+          "description": "Run Nuclei DNS takeover templates against the zone's records.",
+          "tool": "nuclei",
+          "action": "execute",
+          "arguments": ["-t dns/takeover"]
+        }
+      ]
+    }
+  ]
+}

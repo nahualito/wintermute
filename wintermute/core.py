@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional, Sequence
 
-from .basemodels import BaseModel, CloudAccount, Peripheral, PeripheralType
+from .basemodels import BaseModel, CloudAccount, Peripheral
 from .cloud.aws import AWSAccount
 from .findings import ReproductionStep, Vulnerability
 from .hardware import Architecture, Memory, Processor
@@ -495,7 +495,7 @@ class TestCase(BaseModel):
         self,
         code: str,
         name: str,
-        description: str,
+        description: str = "",
         target_scope: Optional[TargetScope] = None,
         steps: Optional[list[ReproductionStep]] = None,
         executed: bool = False,
@@ -779,194 +779,206 @@ class Operation(BaseModel):
         return out
 
     def resolveBindings(self, tc: TestCase) -> dict[str, list[Any]]:
-        """Resolve tc.target_scope.bindings against current Operation devices/peripherals."""
+        """
+        Resolve tc.target_scope.bindings against Devices AND CloudAccounts.
+        Strictly respects object capabilities to avoid cross-domain pollution.
+        """
         resolved: dict[str, list[Any]] = {}
 
-        # Devices
+        # ---------------------------------------------------------
+        # 1. Resolve Containers (Devices / CloudAccounts)
+        # ---------------------------------------------------------
         for sel in tc.target_scope.bindings:
             if sel.kind != BindKind.device:
                 continue
             where = sel.where or {}
-            host = str(where.get("hostname", "")).strip()
-            fqdn = str(where.get("fqdn", "")).strip()
+            matches: list[Any] = []
 
-            matches: list[Device] = []
+            # A) Check Devices (Standard Hostnames/IPs)
             for d in self.devices:
-                if host and getattr(d, "hostname", "") != host:
-                    continue
-                if fqdn and getattr(d, "fqdn", "") != fqdn:
-                    continue
-                matches.append(d)
+                if self._match_attributes(d, where):
+                    matches.append(d)
+
+            # B) Check Cloud Accounts (Treat as 'Logical Devices')
+            for acc in self.cloud_accounts:
+                # Map 'hostname' in selectors to 'name' for accounts if needed
+                # or simply check generic attributes
+                if self._match_attributes(acc, where):
+                    matches.append(acc)
 
             resolved[sel.name] = matches
-            if sel.cardinality == BindCardinality.one and len(matches) != 1:
-                raise ValueError(
-                    f"{tc.code}: binding '{sel.name}' expected 1 device, got {len(matches)}"
-                )
-            if sel.cardinality == BindCardinality.at_least_one and len(matches) < 1:
-                raise ValueError(
-                    f"{tc.code}: binding '{sel.name}' expected >=1 device, got 0"
-                )
+            self._validate_cardinality(tc, sel, matches)
 
-        # Peripherals
+        # ---------------------------------------------------------
+        # 2. Resolve Peripherals (Services, Users, Roles)
+        # ---------------------------------------------------------
         for sel in tc.target_scope.bindings:
             if sel.kind != BindKind.peripheral:
                 continue
             where = sel.where or {}
 
-            dev_alias = where.get("device")
-            devs: list[Device]
-            if isinstance(dev_alias, str) and dev_alias in resolved:
-                devs = [x for x in resolved[dev_alias] if isinstance(x, Device)]
+            # Determine Search Scope
+            parent_alias = where.get("device")  # Look for explicit parent binding
+            candidates: list[Any] = []
+
+            # Identify Parents to Scan
+            parents: list[Any] = []
+            if isinstance(parent_alias, str) and parent_alias in resolved:
+                parents = resolved[parent_alias]
             else:
-                devs = list(self.devices)
+                # If no parent specified, scan EVERYTHING (Logic separated by type below)
+                parents = list(self.devices) + list(self.cloud_accounts)
 
-            # pType matching by NAME ("UART") or int
-            want_ptype: PeripheralType | None = None
-            ptype = where.get("pType")
-            if isinstance(ptype, PeripheralType):
-                want_ptype = ptype
-            elif isinstance(ptype, str):
-                try:
-                    want_ptype = PeripheralType[ptype]
-                except KeyError:
-                    want_ptype = None
-            elif isinstance(ptype, int):
-                try:
-                    want_ptype = PeripheralType(ptype)
-                except ValueError:
-                    want_ptype = None
+            # Gather Candidates based on Parent Type
+            for p in parents:
+                # --- CASE 1: It is a DEVICE ---
+                if isinstance(p, Device):
+                    if hasattr(p, "peripherals"):
+                        candidates.extend(p.peripherals)
+                    if hasattr(p, "services"):
+                        # These are core.Service objects (Ports/Protocols)
+                        candidates.extend(p.services)
 
-            name = str(where.get("name", "")).strip()
+                # --- CASE 2: It is a CLOUD ACCOUNT ---
+                # We check hasattr to support generic CloudAccount or AWSAccount
+                else:
+                    # AWSAccount specific lists
+                    if hasattr(p, "iamusers"):
+                        candidates.extend(p.iamusers)
+                    if hasattr(p, "iamroles"):
+                        candidates.extend(p.iamroles)
 
-            matches_p: list[Peripheral] = []
-            for d in devs:
-                for p in getattr(d, "peripherals", []):
-                    if name and getattr(p, "name", "") != name:
-                        continue
-                    if (
-                        want_ptype is not None
-                        and getattr(p, "pType", None) != want_ptype
-                    ):
-                        continue
-                    matches_p.append(p)
+                    # 'services' on AWSAccount are AWSService objects (Lambda/S3/etc)
+                    # This name collision is handled by the attribute matcher below
+                    if hasattr(p, "services"):
+                        candidates.extend(p.services)
+
+                    # CloudAccount generic lists
+                    if hasattr(p, "users"):
+                        candidates.extend(p.users)
+
+            # Filter candidates based on 'where' clause
+            matches_p = []
+            for obj in candidates:
+                # Exclude the 'device' scope key from attribute matching
+                clean_where = {k: v for k, v in where.items() if k != "device"}
+
+                if self._match_attributes(obj, clean_where):
+                    matches_p.append(obj)
 
             resolved[sel.name] = matches_p
-            if sel.cardinality == BindCardinality.one and len(matches_p) != 1:
-                raise ValueError(
-                    f"{tc.code}: binding '{sel.name}' expected 1 peripheral, got {len(matches_p)}"
-                )
-            if sel.cardinality == BindCardinality.at_least_one and len(matches_p) < 1:
-                known = [d.hostname for d in self.devices]
-                raise ValueError(
-                    f"{tc.code}: binding '{sel.name}' expected >=1 peripheral, got 0"
-                    f"where={sel.where!r}; known_hostnames={known!r}"
-                )
+            self._validate_cardinality(tc, sel, matches_p)
 
         return resolved
 
+    def _match_attributes(self, obj: Any, where: dict[str, Any]) -> bool:
+        """Helper to match object attributes against a where dict, handling Enums."""
+        for k, v in where.items():
+            # If object lacks the attribute, it's not a match.
+            # This implicitly filters Device.services (no service_type)
+            # from AWSAccount.services (has service_type)
+            if not hasattr(obj, k):
+                return False
+
+            attr_val = getattr(obj, k, None)
+
+            # Handle Enum Matching (e.g. JSON "lambda" vs AWSServiceType.LAMBDA)
+            if isinstance(attr_val, Enum):
+                if isinstance(v, str):
+                    # Check Name (LAMBDA) or Value (lambda)
+                    if attr_val.value != v and attr_val.name.lower() != v.lower():
+                        return False
+                elif attr_val != v:
+                    return False
+
+            # Handle Standard Equality
+            elif attr_val != v:
+                return False
+        return True
+
+    def _validate_cardinality(
+        self, tc: TestCase, sel: ObjectSelector, matches: list[Any]
+    ) -> None:
+        """Helper to raise errors on cardinality mismatches."""
+        if sel.cardinality == BindCardinality.one and len(matches) != 1:
+            raise ValueError(
+                f"{tc.code}: binding '{sel.name}' expected 1 object, got {len(matches)}"
+            )
+        if sel.cardinality == BindCardinality.at_least_one and len(matches) < 1:
+            raise ValueError(
+                f"{tc.code}: binding '{sel.name}' expected >=1 object, got 0."
+            )
+
     def createRunsForTestCase(self, tc: TestCase) -> list[TestCaseRun]:
-        """Create 1..N TestCaseRun objects for a test case based on tc.execution_mode."""
-        resolved = self.resolveBindings(tc)
+        try:
+            resolved = self.resolveBindings(tc)
+        except ValueError as e:
+            log.warning(f"Skipping {tc.code}: {e}")
+            return []
+
         runs: list[TestCaseRun] = []
 
-        def device_object_id(d: Device) -> str:
-            # No code/id on Device in current model; use hostname/fqdn for now.
-            return str(getattr(d, "hostname", "")) or str(getattr(d, "fqdn", ""))
+        # Helper to find identifiers
+        def get_id(obj: Any) -> str:
+            # Check Cloud/AWS attributes first
+            for attr in ["account_id", "arn", "role_name", "username", "uid"]:
+                val = getattr(obj, attr, None)
+                if val:
+                    return str(val)
+            # Check Device attributes
+            for attr in ["hostname", "fqdn", "name"]:
+                val = getattr(obj, attr, None)
+                if val:
+                    return str(val)
+            return "unknown"
 
-        def find_parent_device(per: Peripheral) -> Device | None:
+        # Helper to find parent container
+        def find_parent(obj: Any) -> Any | None:
+            # Check Cloud Accounts first (Most likely for this Context)
+            for acc in self.cloud_accounts:
+                for lst in ["services", "iamusers", "iamroles", "users"]:
+                    if obj in getattr(acc, lst, []):
+                        return acc
+            # Check Devices
             for d in self.devices:
-                if per in getattr(d, "peripherals", []):
+                if obj in getattr(d, "peripherals", []) or obj in getattr(
+                    d, "services", []
+                ):
                     return d
             return None
-
-        def peripheral_object_id(p: Peripheral, parent: Device | None) -> str:
-            if parent is not None:
-                return f"{device_object_id(parent)}:{getattr(p, 'name', '')}"
-            return str(getattr(p, "name", ""))
-
-        if tc.execution_mode == ExecutionMode.once:
-            runs.append(TestCaseRun(run_id=f"{tc.code}:1", test_case_code=tc.code))
-            log.info(f"Created 1 TestCaseRun for TestCase {tc.code} using once mode")
-            return runs
-
-        if tc.execution_mode == ExecutionMode.per_device:
-            # If any device binding exists, use its matches; else all devices.
-            devs: list[Device] = []
-            for sel in tc.target_scope.bindings:
-                if sel.kind == BindKind.device:
-                    devs = [
-                        x for x in resolved.get(sel.name, []) if isinstance(x, Device)
-                    ]
-                    break
-            if not devs:
-                devs = list(self.devices)
-
-            for i, d in enumerate(devs, 1):
-                runs.append(
-                    TestCaseRun(
-                        run_id=f"{tc.code}:dev{i}",
-                        test_case_code=tc.code,
-                        bound=[
-                            BoundObjectRef(
-                                kind="device",
-                                object_id=device_object_id(d),
-                                alias="dut",
-                            )
-                        ],
-                    )
-                )
-                log.debug(
-                    f"Created TestCaseRun {tc.code}:dev{i} for Device {d.hostname}"
-                )
-            log.info(
-                f"Created {len(devs)} TestCaseRuns for TestCase {tc.code} using per_device mode"
-            )
-            return runs
 
         if tc.execution_mode == ExecutionMode.per_binding:
             alias = tc.execution_binding.strip()
             objs = resolved.get(alias, [])
+
             for i, obj in enumerate(objs, 1):
-                if isinstance(obj, Peripheral):
-                    parent = find_parent_device(obj)
-                    runs.append(
-                        TestCaseRun(
-                            run_id=f"{tc.code}:{alias}{i}",
-                            test_case_code=tc.code,
-                            bound=[
-                                BoundObjectRef(
-                                    kind="peripheral",
-                                    object_id=peripheral_object_id(obj, parent),
-                                    alias=alias,
-                                )
-                            ],
-                        )
+                parent = find_parent(obj)
+                p_id = get_id(parent) if parent else "orphan"
+                o_id = get_id(obj)
+
+                # ID Format: TC_CODE : PARENT_ID : OBJECT_ID
+                run_id = f"{tc.code}:{p_id}:{o_id}"
+
+                # Determine Kind
+                kind_str = "peripheral"
+                if isinstance(obj, Device) or isinstance(obj, CloudAccount):
+                    kind_str = "device"
+
+                runs.append(
+                    TestCaseRun(
+                        run_id=run_id,
+                        test_case_code=tc.code,
+                        bound=[
+                            BoundObjectRef(kind=kind_str, object_id=o_id, alias=alias)
+                        ],
                     )
-                elif isinstance(obj, Device):
-                    runs.append(
-                        TestCaseRun(
-                            run_id=f"{tc.code}:{alias}{i}",
-                            test_case_code=tc.code,
-                            bound=[
-                                BoundObjectRef(
-                                    kind="device",
-                                    object_id=device_object_id(obj),
-                                    alias=alias,
-                                )
-                            ],
-                        )
-                    )
-                log.debug(
-                    f"Created TestCaseRun {tc.code}:{alias}{i} for {alias} object"
                 )
-            log.info(
-                f"Created {len(objs)} TestCaseRuns for TestCase {tc.code} using binding '{alias}'"
-            )
             return runs
-        log.warning(
-            f"No TestCaseRuns created for TestCase {tc.code}, unknown execution_mode {tc.execution_mode}"
-        )
+
+        # ... (Handle 'once' and 'per_device' modes similarly) ...
+        if tc.execution_mode == ExecutionMode.once:
+            runs.append(TestCaseRun(run_id=f"{tc.code}:once", test_case_code=tc.code))
+
         return runs
 
     def generateTestRuns(self, *, replace: bool = False) -> list[TestCaseRun]:

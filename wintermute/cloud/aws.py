@@ -104,6 +104,9 @@ class AWSServiceType(Enum):
     ELB = "elb"
     EKS = "eks"
     LEX = "lex"
+    SSM = "ssm"
+    API_GATEWAY = "apigateway"
+    ECR = "ecr"
     OTHER = "other"
 
 

