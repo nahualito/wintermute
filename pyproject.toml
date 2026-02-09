@@ -37,6 +37,7 @@ dependencies = [
   "mcp",
   "asyncio",
   "pytest-asyncio",
+  "setuptools",
 ]
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
