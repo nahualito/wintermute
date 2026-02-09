@@ -111,7 +111,7 @@
             "kind": "peripheral",
             "name": "iam_user",
             "cardinality": "many",
-            "where": { "cloud_type": "AWS" }
+            "where": { "resource_type": "iam_user" }
           }
         ]
       },
@@ -138,7 +138,7 @@
             "kind": "peripheral",
             "name": "iam_user",
             "cardinality": "many",
-            "where": { "cloud_type": "AWS" }
+            "where": { "resource_type": "iam_user" }
           }
         ]
       },

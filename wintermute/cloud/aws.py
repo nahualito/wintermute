@@ -73,6 +73,7 @@ class IAMUser(BaseModel):
     administrator: bool = False
     attached_policies: List[str] = field(default_factory=list)
     custom_properties: Dict[str, Any] = field(default_factory=dict)
+    resource_type: str = "iam_user"
 
     __schema__ = {}
     __enums__ = {}
@@ -85,6 +86,7 @@ class IAMRole(BaseModel):
     administrator: bool = False
     attached_policies: List[str] = field(default_factory=list)
     custom_properties: Dict[str, Any] = field(default_factory=dict)
+    resource_type: str = "iam_role"
 
     __schema__ = {}
     __enums__ = {}

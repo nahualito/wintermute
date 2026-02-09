@@ -1,0 +1,184 @@
+{
+  "code": "TP-AWS-IAM-ROLE-001",
+  "name": "IAM Role Security & Exploitation",
+  "description": "Deep-dive assessment of IAM Roles focusing on Trust Policy abuse, Privilege Escalation, and lateral movement using Pacu, Prowler, and manual checks.",
+  "test_cases": [
+    {
+      "code": "IAM-ROLE-TRUST-AUDIT-001",
+      "name": "Trust Policy Wildcard & External Access",
+      "description": "Analyze the Trust Policy (AssumeRolePolicyDocument) for dangerous wildcards ('*') or unauthorized external account IDs.",
+      "execution_mode": "per_binding",
+      "execution_binding": "target_role",
+      "target_scope": {
+        "tags": ["iam", "role", "trust"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "target_role",
+            "cardinality": "many",
+            "where": { "resource_type": "iam_role" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Retrieve Trust Policy",
+          "description": "Get the policy document.",
+          "tool": "aws-cli",
+          "action": "audit",
+          "arguments": [
+            "iam get-role --role-name <ROLE_NAME> --query 'Role.AssumeRolePolicyDocument'"
+          ]
+        },
+        {
+          "title": "Check for Wildcard Principal",
+          "description": "Manual or automated check for 'Principal': {'AWS': '*'}.",
+          "tool": "manual",
+          "action": "audit",
+          "arguments": ["grep for '*' in Principal"]
+        }
+      ]
+    },
+    {
+      "code": "IAM-ROLE-PRIVESC-PACU-001",
+      "name": "Privilege Escalation Scan (Pacu)",
+      "description": "Use Pacu's automated scanning module to identify if the role has permissions (like PutUserPolicy) that allow escalation to Administrator.",
+      "execution_mode": "per_binding",
+      "execution_binding": "target_role",
+      "target_scope": {
+        "tags": ["iam", "role", "privesc"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "target_role",
+            "cardinality": "many",
+            "where": { "resource_type": "iam_role" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Pacu PrivEsc Scan",
+          "description": "Execute the iam__privesc_scan module against the role context.",
+          "tool": "pacu",
+          "action": "scan",
+          "arguments": ["run iam__privesc_scan"]
+        }
+      ]
+    },
+    {
+      "code": "IAM-ROLE-ASSUME-TEST-001",
+      "name": "Role Assumption Verification",
+      "description": "Attempt to assume the role from the attacker's current context to verify exploitability.",
+      "execution_mode": "per_binding",
+      "execution_binding": "target_role",
+      "target_scope": {
+        "tags": ["iam", "role", "lateral-movement"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "target_role",
+            "cardinality": "many",
+            "where": { "resource_type": "iam_role" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Attempt AssumeRole",
+          "description": "Call sts assume-role.",
+          "tool": "aws-cli",
+          "action": "exploit",
+          "arguments": [
+            "sts assume-role --role-arn <ARN> --role-session-name WintermuteCheck"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "IAM-ROLE-ADMIN-CHECK-001",
+      "name": "AdministratorAccess Policy Check",
+      "description": "Check if the 'AdministratorAccess' managed policy is attached directly to the role.",
+      "execution_mode": "per_binding",
+      "execution_binding": "target_role",
+      "target_scope": {
+        "tags": ["iam", "role", "high-priv"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "target_role",
+            "cardinality": "many",
+            "where": { "resource_type": "iam_role" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "List Attached Policies",
+          "description": "Enumerate attached policies looking for AdministratorAccess.",
+          "tool": "aws-cli",
+          "action": "audit",
+          "arguments": [
+            "iam list-attached-role-policies --role-name <ROLE_NAME>"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "IAM-ROLE-SERVICE-ABUSE-001",
+      "name": "Service Principal Confused Deputy Check",
+      "description": "Identify roles assumable by AWS services (e.g., ec2.amazonaws.com) that lack 'ExternalId' or 'SourceArn' conditions.",
+      "execution_mode": "per_binding",
+      "execution_binding": "target_role",
+      "target_scope": {
+        "tags": ["iam", "role", "confused-deputy"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "target_role",
+            "cardinality": "many",
+            "where": { "resource_type": "iam_role" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Analyze Condition Keys",
+          "description": "Check trust policy for missing sts:ExternalId or aws:SourceArn when a Service principal is defined.",
+          "tool": "manual",
+          "action": "audit",
+          "arguments": ["Review AssumeRolePolicyDocument for Conditions"]
+        }
+      ]
+    },
+    {
+      "code": "IAM-ROLE-PROWLER-AUDIT-001",
+      "name": "Prowler CIS Level 1 Role Audit",
+      "description": "Run Prowler's IAM-specific checks to validate compliance against CIS benchmarks.",
+      "execution_mode": "per_binding",
+      "execution_binding": "target_role",
+      "target_scope": {
+        "tags": ["iam", "role", "compliance"],
+        "bindings": [
+          {
+            "kind": "peripheral",
+            "name": "target_role",
+            "cardinality": "many",
+            "where": { "resource_type": "iam_role" }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Prowler IAM Check",
+          "description": "Run Prowler targeting IAM group checks.",
+          "tool": "prowler",
+          "action": "audit",
+          "arguments": [
+            "aws --services iam --check-ids iam_role_cross_account_read_only_access_detection"
+          ]
+        }
+      ]
+    }
+  ]
+}
