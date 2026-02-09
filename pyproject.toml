@@ -80,7 +80,7 @@ include = ["/wintermute"]
 packages = ["wintermute"]
 
 [tool.hatch.envs.ci]
-dev-mode = false
+dev-mode = true
 features = [
   "checks",
   "tests",
@@ -167,32 +167,5 @@ dependencies = [
   "httpx>=0.23,<1",
   "pytest>=8.1.1,<9",
   "pytest-mock>=3,<4",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
-  "setuptools",
   "setuptools",
 ]
