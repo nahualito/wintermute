@@ -1,78 +1,161 @@
 [build-system]
-backend = "hatchling"
+build-backend = "hatchling.build"
 requires = ["hatchling>=1.26.3,<2"]
 
 [project]
-name = "wintermute"
-authors = [{name = "Enrique Sanchez"}]
-classifiers = ["Programming Language :: Python :: 3.11",
-              "Programming Language :: Python :: 3.12",
-              "Programming Language :: Python :: 3.13"]
-dependencies = ["ipaddress",
-                "tinydb",
-                "pyserial",
-                "cmd2",
-                "argparse",
-                "importlib",
-                "typing",
-                "logging",
-                "datetime",
-                "bs4",
-                "xlsxwriter",
-                "lxml",
-                "types-requests",
-                "requests",
-                "docxtpl",
-                "docxcompose",
-                "depthcharge>=0.6.0",
-                "boto3",
-                "boto3-stubs",
-                "openai",
-                "groq",
-                "mcp",
-                "asyncio",
-                "pytest-asyncio",
-                "setuptools"]
-description = "Hardware security hacking and auditing framework"
-dynamic = "version"
+authors = [{ email = "enrique.sanchez@caissa-security.com", name = "Enrique Sanchez" }]
+classifiers = [
+  "Natural Language :: English",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+  "ipaddress",
+  "tinydb",
+  "pyserial",
+  "cmd2",
+  "argparse",
+  "importlib",
+  "typing",
+  "logging",
+  "datetime",
+  "bs4",
+  "xlsxwriter",
+  "lxml",
+  "types-requests",
+  "requests",
+  "docxtpl",
+  "docxcompose",
+  "depthcharge>=0.6.0",
+  "boto3",
+  "boto3-stubs",
+  "openai",
+  "groq",
+  "mcp",
+  "asyncio",
+  "pytest-asyncio",
+]
+description = "Hardware security hacking and auditing framework for attack and pentesting automation."
+dynamic = ["version"]
 license = "MIT"
+name = "wintermute"
 readme = "README.md"
 requires-python = ">=3.11,<4"
 
 [project.optional-dependencies]
-checks = ["mypy==1.15.0", "ruff>=0.11,<0.12"]
-docs = ["mkdocs-material>=9,<10"]
-tests = ["coverage[toml]>=7,<8",
-         "httpx>=0.23,<1",
-         "pytest>=8.1.1,<9",
-         "pytest-mock>=3,<4"]
+checks = [
+  "mypy==1.15.0",
+  "ruff>=0.11,<0.12",
+]
+docs = [
+  "mkdocs-material>=9,<10",
+]
+tests = [
+  "coverage[toml]>=7,<8",
+  "httpx>=0.23,<1",
+  "pytest>=8.1.1,<9",
+  "pytest-mock>=3,<4",
+]
 
 [project.scripts]
-wintermute = "wintermute"
+wintermute = "wintermute.WintermuteREPL:main"
 
 [tool.coverage.report]
-exclude_lines = [...]
+exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]
 fail_under = 70
 show_missing = true
 
 [tool.coverage.run]
-command_line = [...]
-source = [...]
+command_line = "-m pytest"
+source = ["wintermute", "tests"]
 
 [tool.hatch.build.targets.sdist]
-...
+include = ["/wintermute"]
 
 [tool.hatch.build.targets.wheel]
-...
+packages = ["wintermute"]
 
 [tool.hatch.envs.ci]
-dev-mode = true
-features = ["checks", "tests"]
+dev-mode = false
+features = [
+  "checks",
+  "tests",
+]
 path = ".venv"
-scripts = ["check"]
+
+[tool.hatch.envs.ci.scripts]
+check = [
+  "ruff check",
+  "ruff format --check",
+  "mypy",
+  "npx -s -y prettier@'^3.4' . --check",
+  "npx -s -y cspell --dot --gitignore *.md **/*.md",
+]
 
 [tool.hatch.envs.default]
 dev-mode = true
-features = ["checks", "docs", "tests"]
+features = [
+  "checks",
+  "docs",
+  "tests",
+]
 path = ".venv"
-scripts = ["check", "format"]
+
+[tool.hatch.envs.default.scripts]
+check = [
+  "ruff check",
+  "ruff format --check",
+  "mypy",
+  "npx -s -y prettier@'^3.4' . --check",
+  "npx -s -y cspell --dot --gitignore *.md **/*.md",
+]
+format = [
+  "ruff check --fix",
+  "ruff format",
+  "npx -s -y prettier@'^3.4' . --write",
+]
+
+[tool.hatch.envs.dev]
+dependencies = [
+  "pylink-square @ git+https://github.com/square/pylink.git#egg=pylink-square",
+]
+
+[tool.hatch.envs.production]
+dev-mode = false
+features = []
+path = ".venv"
+
+[tool.hatch.version]
+path = "wintermute/__init__.py"
+
+[tool.mypy]
+files = ["**/*.py"]
+show_error_codes = true
+strict = true
+
+# Tell mypy to ignore missing type hints for these 3rd-party libs
+[[tool.mypy.overrides]]
+module = "xlsxwriter.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+minversion = "6.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+src = ["wintermute", "tests"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wintermute", "tests"]
