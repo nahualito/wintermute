@@ -30,7 +30,7 @@ import pytest
 
 from wintermute.ai.json_types import JSONObject
 from wintermute.ai.tools_runtime import Tool, ToolRegistry
-from wintermute.ai.utils import enrich_processor
+from wintermute.ai.utils.hardware import enrich_processor
 from wintermute.hardware import Architecture, Processor
 
 
@@ -75,7 +75,7 @@ def test_enrich_processor_success() -> None:
     )
 
     with patch(
-        "wintermute.ai.utils.simple_chat", return_value=llm_response_json
+        "wintermute.ai.utils.hardware.simple_chat", return_value=llm_response_json
     ) as mock_chat:
         enriched = enrich_processor(initial_proc)
 
@@ -100,7 +100,7 @@ def test_enrich_processor_failure() -> None:
     """Test graceful failure on bad JSON."""
     initial_proc = Processor(processor="GenericChip")
 
-    with patch("wintermute.ai.utils.simple_chat", return_value="NOT JSON"):
+    with patch("wintermute.ai.utils.hardware.simple_chat", return_value="NOT JSON"):
         enriched = enrich_processor(initial_proc)
 
         # Should return original processor without crashing

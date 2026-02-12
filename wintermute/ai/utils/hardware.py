@@ -26,10 +26,10 @@
 import json
 import logging
 
-from ..hardware import Processor
-from .bootstrap import init_router
-from .provider import Router
-from .use import simple_chat
+from ...hardware import Processor
+from ..bootstrap import init_router
+from ..provider import Router
+from ..use import simple_chat
 
 logger = logging.getLogger(__name__)
 

@@ -35,6 +35,10 @@ dependencies = [
   "mcp",
   "asyncio",
   "pytest-asyncio",
+  "paramiko",
+  "llama-index-core",
+  "llama-index-llms-bedrock",
+  "llama-index-embeddings-bedrock",
 ]
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
@@ -136,7 +140,11 @@ strict = true
 
 # Tell mypy to ignore missing type hints for these 3rd-party libs
 [[tool.mypy.overrides]]
-module = "xlsxwriter.*"
+module = [
+  "xlsxwriter.*",
+  "llama_index.embeddings.bedrock",
+  "llama_index.llms.bedrock"
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
