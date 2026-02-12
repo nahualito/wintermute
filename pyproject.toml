@@ -36,6 +36,7 @@ dependencies = [
   "asyncio",
   "pytest-asyncio",
   "paramiko",
+  "types-paramiko",
   "llama-index-core",
   "llama-index-llms-bedrock",
   "llama-index-embeddings-bedrock",
