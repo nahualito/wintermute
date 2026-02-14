@@ -10,12 +10,10 @@ markdown_extensions:
   - toc:
       permalink: true
       toc_depth: 3
-nav:
-  - "index.md"
 repo_name: nahualito/wintermute
 repo_url: https://github.com/nahualito/wintermute
 site_name: wintermute docs
-site_url: ""
+site_url: "http://localhost:8000"
 theme:
   favicon: assets/images/favicon.png
   features:
@@ -27,7 +25,11 @@ theme:
   icon:
     logo: octicons/book-24
     repo: octicons/mark-github-16
-  name: material
+  name: readthedocs
+  highlightjs: true
+  hljs_languages:
+    - python
+    - yaml
   palette:
     - media: "(prefers-color-scheme: dark)"
       accent: cyan
@@ -43,4 +45,16 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: Switch to dark mode
-use_directory_urls: false
+use_directory_urls: true
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]
+  - gen-files:
+      scripts:
+        - gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md # CHANGED: Points to root file
+  - section-index

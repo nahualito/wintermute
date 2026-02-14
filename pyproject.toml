@@ -40,6 +40,10 @@ dependencies = [
   "llama-index-core",
   "llama-index-llms-bedrock",
   "llama-index-embeddings-bedrock",
+  "mkdocstrings[python]",
+  "mkdocs-gen-files",
+  "mkdocs-literate-nav",
+  "mkdocs-section-index",
 ]
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
