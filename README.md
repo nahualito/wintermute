@@ -5,7 +5,13 @@
 
 ![](docs/assets/images/wintermute_log.svg)
 
-# Welcome to wintermute’s documentation!
+# Wintermute
+
+**Wintermute** is a comprehensive cybersecurity assessment framework and library designed for managing complex operations involving Hardware, Cloud (AWS), and Systems security. It bridges the gap between manual penetration testing management and AI-driven automation.
+
+It serves as both a state management engine for security operations and a runtime environment for AI agents (LLMs) to interact with physical hardware (via tools like Depthcharge), cloud infrastructure, and ticketing systems.
+
+---
 
 ## Usage
 
@@ -29,7 +35,20 @@ docker run -it --rm -v $(pwd):/opt/wintermute
 
 This will add the current folder as a volume to the docker container so you can save your work.
 
-# Design
+## 🚀 What does it do?
+
+Wintermute provides a structured object model to represent a Security Operation (Pentest). It tracks:
+
+- **Assets:** Devices, Servers, Cloud Accounts (AWS), and Users.
+- **Hardware:** Processors, Architectures (ARM, x86, RISC-V), and Peripherals (UART, JTAG, TPM).
+- **Findings:** Vulnerabilities, reproduction steps, and risk scoring.
+- **Orchestration:** Declarative Test Plans and automated Test Runs.
+
+It allows you to spin up an `Operation`, attach an AI Agent (using Bedrock, OpenAI, or Groq), and have that agent query manuals (RAG), interact with U-Boot consoles, or manage tickets in an external tracker, all while maintaining a consistent state.
+
+---
+
+## 🛠 Design & Architecture
 
 Wintermute is designed as a modular hardware offensive framework to manage security operations, pentests, and device analysis. The core of Wintermute is built around several key classes that represent the main entities in a security operation, including Operations, Pentests, Analysts, Devices, Services, Vulnerabilities, and Risks. Each class encapsulates relevant attributes and methods to manage its data and relationships with other classes.
 
@@ -220,135 +239,247 @@ classDiagram
     RiskUtil ..> Risk
 ```
 
-## What does it do now?
+### Core Domain
 
-Wintermute is a hardware offensive framework designed for rapid prototyping and management of security operations, pentests, and device analysis. It provides a modular architecture where users can define and manage operations, analysts, devices, services, vulnerabilities, and risks, all linked through a central data model. The framework supports extensibility via "cartridges," which are plugin-like modules for hardware and offensive extensions (such as TPM 2.0 fuzzing or IoT device analysis). Users interact with Wintermute primarily through its REPL console (./wintermuteConsole), which allows loading and unloading cartridges, managing operations, and executing custom commands in a streamlined workflow.
-
-As a library, Wintermute can be imported into Python projects to leverage its core classes and utilities for building custom security automation, device management, or vulnerability tracking solutions. End users can instantiate and manipulate objects such as Operation, Pentest, Device, and Peripheral directly in code, or use the REPL for interactive management. The framework supports both standard and star-import patterns, exposing modules and classes while keeping the environment clean. Data can be saved and loaded from various database backends, and documentation is provided via Sphinx for easy integration and extension. This makes Wintermute suitable for both interactive use and as a foundation for building advanced security tooling.
-
-The current utility modules are:
-
-- utils.parserUtil: Utilities for parsing device and service information.
-- utils.findingUtil: Utilities for parsing and formatting findings.
-- utils.riskUtil: Utilities for calculating risk levels.
-
-The current backend modules are:
-
-- bugzilla: Bugzilla backend for issue tracking.
-- docxreports: DOCX report generation backend.
-
-The current "cartridges" are:
-
-- tpm20: TPM 2.0 library to talk and setup fuzzing for the TPMs
-
-Currently peripherals supported are:
-
-- UART: Universal Asynchronous Receiver-Transmitter interface for serial communication.
-- Wifi: Wireless network interface for connecting to Wi-Fi networks.
-- Ethernet: Wired network interface for Ethernet connections.
-- JTAG: Joint Test Action Group interface for debugging and programming hardware devices.
-- Bluetooth: Wireless technology for short-range communication between devices.
-- TPM: Trusted Platform Module for secure cryptographic operations and storage.
-
-The framework has abstraction classes such as Ticket() to manage tickets from different backends (Bugzilla, JIRA, etc) and Database backends such as TinyDB, SQLite, or others to store the data. it also supports Report() to manage report generation in different formats (HTML, DOCX, PDF, etc).
-
-## User requirements
-
-The library should be able to be imported in both "import wintermute", "from wintermute import \*", and "from wintermute import core".
-
-Importing as a normal library and showing the classes and objects including "core", "database" and "wintermute" modules and objects inside of it.
+The heart of Wintermute is the `Operation` class. It acts as the central repository for all state.
 
 ```python
-Python 3.10.6 (main, Aug 11 2022, 13:49:25) [Clang 13.1.6 (clang-1316.0.21.2.5)] on darwin
-Type "help", "copyright", "credits" or "license" for more information.
->>> import wintermute
->>> c = wintermute.wintermute()
->>> f = wintermute.core.
-wintermute.core.Analyst(         wintermute.core.Operation(       wintermute.core.Query()
-wintermute.core.TinyDB(          wintermute.core.ipaddress        wintermute.core.re
-wintermute.core.vulnerability()
-wintermute.core.Device(          wintermute.core.Pentest(         wintermute.core.Service(
-wintermute.core.User()           wintermute.core.logging          wintermute.core.uuid
->>> f = wintermute.
-wintermute.abspath(   wintermute.basename(  wintermute.core
-wintermute.database   wintermute.dirname(   wintermute.isfile(
-wintermute.join(      wintermute.wintermute  wintermute.path
->>> f = wintermute.database.
-wintermute.database.CommandSet()            wintermute.database.TinyDB(
-wintermute.database.cmd2                    wintermute.database.logging
-wintermute.database.with_category(
-wintermute.database.Query()                 wintermute.database.argparse
-wintermute.database.dbBackend(              wintermute.database.with_argparser(
-wintermute.database.with_default_category(
->>> quit()
+from wintermute.core import Operation, Device, Analyst
+from wintermute.hardware import Architecture, Processor
+
+# 1. Initialize an Operation
+op = Operation("Project_Neuromancer")
+
+# 2. Add Assets
+op.addDevice(
+    hostname="gibson_mainframe",
+    ipaddr="192.168.1.55",
+    operatingsystem="Irix",
+    architecture=Architecture.MIPS,
+    processor=Processor.R4000
+)
+
+# 3. Add Staff
+op.addAnalyst(name="Case", userid="console_cowboy", email="case@wintermute.ai")
+
+# 4. Save State (Persistence is backend-agnostic)
+op.save()
+
 ```
 
-Also it allows for \* importing, this still will only import modules and not the functions to remove the possibility of having a "dirty environment" and function overrides.
+### Storage Backends
+
+Wintermute decouples the logic from where data is stored. You can switch backends seamlessly.
+
+- **JsonFileBackend:** Stores operations as local `.json` files. Great for local dev.
+- **DynamoDBBackend:** Stores operations in AWS DynamoDB. Ideal for collaborative, distributed teams.
 
 ```python
->>> from wintermute import *
->>> c = wintermute.wintermute()
->>> f = core.Analyst('Enrique Sanchez', 'nahualito', 'nahual@exploit.ninja')
->>> core.
-core.Analyst(         core.Device(          core.Operation(
-core.Pentest(         core.Query()          core.Service(
-core.TinyDB(          core.User()           core.ipaddress
-core.logging          core.re               core.uuid             core.vulnerability()
->>> wintermute.
-wintermute.CommandSet()            wintermute.Operation(              wintermute.basename(
-wintermute.cmd2                    wintermute.dirname(                wintermute.importlib
-wintermute.isfile(                 wintermute.modules                 wintermute.sys
-wintermute.with_category(
-wintermute.CurrentOperation        wintermute.argparse                wintermute.cartridges
-wintermute.dbBackend(              wintermute.glob                    wintermute.inspect
-wintermute.join(                   wintermute.wintermute(              wintermute.with_argparser(
-wintermute.with_default_category(
->>> quit()
+from wintermute.core import Operation
+from wintermute.backends.json_storage import JsonFileBackend
+from wintermute.backends.dynamodb import DynamoDBBackend
+
+# Local Development
+Operation.register_backend("local", JsonFileBackend("./data"), make_default=True)
+
+# Production
+Operation.register_backend("cloud", DynamoDBBackend(table_name="OpsTable"))
+
+# Switch context at runtime
+Operation.use_backend("cloud")
+
 ```
 
-# REPL Console
+---
 
-## wintermute
+## 🎫 The Ticket System (Metaclass Magic)
 
-Wintermute's REPL is based in the cmd2 library so it supports all cmd2 features plus wintermute's own commands. It has by default disabled run_script and run_pyscript commands for security reasons but they can be enabled if needed.
+Wintermute uses a sophisticated **Metaclass-based** design for Ticket management. This allows the `Ticket` class to behave like a static interface (`Ticket.create(...)`) while delegating logic to interchangeable backends (Jira, Bugzilla, In-Memory) without changing the calling code.
+
+### Usage
+
+The `Ticket` class uses a Protocol to enforce backend compliance.
+
+```python
+from wintermute.tickets import Ticket, InMemoryBackend, Status
+
+# 1. Register a backend (e.g., In-Memory for testing)
+Ticket.register_backend("mem", InMemoryBackend(), make_default=True)
+
+# 2. Create a Ticket (Backend handles the ID generation and storage)
+t_id = Ticket.create(
+    title="UART Root Shell",
+    description="Root shell accessible via UART on J5 header.",
+    status=Status.OPEN
+)
+
+# 3. Interact with it
+Ticket.comment(t_id, text="Verified on v2.0 firmware", author="Case")
+ticket_obj = Ticket.read(t_id)
+
+print(f"{ticket_obj.ticket_id}: {ticket_obj.data.title}")
+
+```
+
+### Creating a Custom Backend
+
+Implement the `TicketBackend` protocol:
+
+```python
+class MyJiraBackend:
+    def create(self, data: TicketData) -> str:
+        # Call Jira API...
+        return "JIRA-123"
+
+    def read(self, ticket_id: str): ...
+    def update(self, ticket_id: str, fields: dict): ...
+    def add_comment(self, ticket_id: str, comment: Comment): ...
+
+```
+
+---
+
+## 🤖 AI Integration & Tools
+
+Wintermute includes a runtime for AI agents (`wintermute.ai`), supporting providers like AWS Bedrock, OpenAI, and Groq. It features a **Tool Registry** that allows functions to be exposed to the LLM automatically.
+
+### Tool Registration
+
+Functions are decorated or manually registered. The `ToolsRuntime` handles execution, supporting both local Python functions and remote MCP tools.
+
+```python
+from wintermute.ai.tools_runtime import tools, Tool
+from wintermute.ai.json_types import JSONObject
+
+def my_custom_tool(args: JSONObject) -> JSONObject:
+    return {"status": "hacked"}
+
+# Register so the AI knows about it
+tools.register(
+    Tool(
+        name="exploit_target",
+        input_schema={"type": "object", "properties": {}},
+        output_schema={"type": "object"},
+        handler=my_custom_tool,
+        description="Exploits the target."
+    )
+)
+
+```
+
+### 🧠 RAG (Hardware Oracle)
+
+The `wintermute.ai.utils.aws_rag` module integrates **LlamaIndex** with **AWS Bedrock**. It allows the AI to query ingested technical manuals (PDFs of datasheets, schematics).
+
+- **Embeddings:** Titan Embed Text v2
+- **LLM:** Claude 3.5 Sonnet
+- **Usage:** The AI automatically calls `query_manuals_handler` when asked technical questions about chips or protocols.
+
+---
+
+## 🔌 Integrations
+
+### 1. Surgeon (MCP Support)
+
+Wintermute supports the **Model Context Protocol (MCP)** via the `SurgeonBackend`.
+
+- **What it is:** Runs a separate process (the Surgeon server) that exposes tools to Wintermute.
+- **Benefit:** Allows the AI to execute dangerous or complex tools in an isolated environment or a different language context.
+- **Usage:** The `ToolsRuntime` dynamically fetches tools from the connected Surgeon server and exposes them to the LLM.
+
+### 2. Depthcharge (Hardware Hacking)
+
+Integration with the **Depthcharge** library allows automated U-Boot interactions.
+
+- **Agent:** `DepthchargePeripheralAgent`
+- **Capabilities:**
+- Catalog U-Boot commands (`help`).
+- Identify dangerous commands (memory write, flash erase).
+- Dump RAM to files.
+
+- **Auto-Vulnerability:** Automatically creates `Vulnerability` objects in the Operation if dangerous configurations (like unrestricted `md` or `mw`) are found.
+
+```python
+from wintermute.backends.depthcharge import DepthchargePeripheralAgent
+from wintermute.peripherals import UART
+
+uart = UART(comPort="/dev/ttyUSB0", baudrate=115200)
+agent = DepthchargePeripheralAgent(uart, arch="arm")
+
+# Scans console, finds dangerous commands, adds Vulnerability to Operation
+agent.catalog_commands_and_flag()
+
+```
+
+---
+
+## 📋 Test Plans & Test Runs
+
+Wintermute moves beyond ad-hoc testing with a declarative Test Plan system.
+
+1. **Test Plan:** A JSON definitions of _what_ to test (e.g., "Check SSH Strength").
+2. **Target Scope:** A query language to select targets (e.g., `kind="device", where={"os": "Linux"}`).
+3. **Test Case:** Combines steps + scope.
+4. **Test Run:** An instance of a test case executed against a specific target.
+
+**Workflow:**
+
+1. Define a plan (e.g., `TestPlans/TP-HW-BLACKBOX-001.json`).
+2. Load it into the Operation.
+3. Generate Runs:
+
+```python
+op.addTestPlan(my_plan)
+# Resolves bindings (finds all Linux devices) and creates execution records
+op.generateTestRuns()
+
+```
+
+4. Execute: The AI or a human updates the status of the `TestCaseRun` (Passed/Failed) and adds `Findings`.
+
+---
+
+## 📠 Reporting
+
+Reports are generated using `wintermute.backends.docx_reports` (implied). It takes the structured data from `Operation`, `TestRuns`, and `Vulnerabilities` to populate Word document templates (`templates/report_main.docx`).
+
+---
+
+## 🔌 Supported Peripherals
+
+Defined in `wintermute/peripherals.py`, these classes model physical interfaces attached to Devices:
+
+- **UART** (Universal Asynchronous Receiver-Transmitter)
+- **JTAG** (Joint Test Action Group)
+- **Wifi** (Wireless interfaces, SSID config)
+- **Ethernet** (MAC, IP, Speed)
+- **Bluetooth** (Paired devices, MAC)
+- **USB** (Version, Role)
+- **PCIe** (Lanes, Version, attached Processors)
+- **TPM** (Trusted Platform Module - includes logic for PCR reading/extending)
+
+---
+
+## 📚 Documentation
+
+Documentation is built using **MkDocs**.
+
+1. Ensure you have the dev dependencies installed.
+2. Run the build command:
 
 ```bash
-nahualito@88665a364f90 > ~/projects/wintermute $ ./wintermuteConsole
-wintermute> help
+mkdocs serve
 
-Documented commands (use 'help -v' for verbose/'help <topic>' for details):
-
-Command Loading
-===============
-load
-
-Uncategorized
-=============
-alias  help     macro  run_pyscript  set    shortcuts
-edit   history  quit   run_script    shell  unload
-
-wintermute> load
-Usage: unload [-h] {sshodan, kalamari, TPM20, nestingpet}
-Error: the following arguments are required: cmds
-
-wintermute> quit
-nahualito@88665a364f90 > ~/projects/wintermute $
 ```
 
-# Documentation
+3. Navigate to `http://127.0.0.1:8000`.
 
-## How to create documentation
+See `mkdocs.yml` for configuration.
 
-wintermute uses sphinx to create it's documentation so just
+---
 
-```bash
-cd docs
-make html
-```
+## 👨‍💻 Development
 
-The documentation will be created into the `docs/_build/html/index.html` file, as the development moves a lot
-we do not include this documentation into our git but allow the user to create it as needed.
+We follow strict coding standards including Type Hinting (MyPy), Linting (Ruff/Pylint), and Formatting (Black).
 
-# Development
-
-For full details on how the internals work, design and full class description and data flows, read [DEVELOPMENT](DEVELOPMENT.md) Design file. For further TODO and ROADMAP read the [ROADMAP](ROADMAP.md) file
+Please refer to [DEVELOPMENT.md](DEVELOPMENT.md) for setting up your environment, running tests, and contribution guidelines.

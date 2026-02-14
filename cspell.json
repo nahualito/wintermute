@@ -108,6 +108,11 @@
     "docxreports",
     "UART",
     "JTAG",
-    "pyscript"
+    "pyscript",
+    "Depthcharge",
+    "Groq",
+    "Metaclass",
+    "datasheets",
+    "Pylint"
   ]
 }
