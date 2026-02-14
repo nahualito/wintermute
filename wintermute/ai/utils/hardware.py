@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 def enrich_processor(processor: Processor, router: Router | None = None) -> Processor:
+    """Enriches a Processor object with detailed information using the AI router."""
+
     if router is None:
         router = init_router()
         logger.debug("Router not defined, initializing inside enrich_processor")

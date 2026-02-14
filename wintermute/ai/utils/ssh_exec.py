@@ -29,7 +29,8 @@ from typing import Any, Dict, cast
 import paramiko
 
 from wintermute.ai.json_types import JSONObject
-from wintermute.ai.tools_runtime import Tool, tools
+
+from .tool_factory import register_tools
 
 # Global Cache to keep SSH connections alive between tool calls
 _SSH_CLIENTS: Dict[str, Any] = {}
@@ -104,48 +105,6 @@ def upload_file_handler(args: JSONObject) -> JSONObject:
         return {"error": str(e)}
 
 
-# --- Tool Definitions ---
+# --- Tool Registration ---
 
-cmd_tool = Tool(
-    name="run_remote_command",
-    description="Executes a shell command on the target. Use this to unpack tools, run make, or execute scripts.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "hostname": {"type": "string"},
-            "username": {"type": "string"},
-            "command": {"type": "string"},
-            "key_path": {"type": "string"},
-        },
-        "required": ["hostname", "username", "command"],
-    },
-    output_schema={"type": "object", "properties": {"stdout": {"type": "string"}}},
-    handler=run_command_handler,
-)
-
-upload_tool = Tool(
-    name="upload_tool_to_remote",
-    description="Uploads a local file (binary, tgz, script) to the target machine. Use this when the Test Case specifies a tool path.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "hostname": {"type": "string"},
-            "username": {"type": "string"},
-            "local_path": {
-                "type": "string",
-                "description": "Path on YOUR machine (e.g., ./tools/pkgs/exploit.tgz)",
-            },
-            "remote_path": {
-                "type": "string",
-                "description": "Destination on target (e.g., /tmp/exploit.tgz)",
-            },
-            "key_path": {"type": "string"},
-        },
-        "required": ["hostname", "username", "local_path", "remote_path"],
-    },
-    output_schema={"type": "object", "properties": {"result": {"type": "string"}}},
-    handler=upload_file_handler,
-)
-
-tools.register(cmd_tool)
-tools.register(upload_tool)
+register_tools([run_command_handler, upload_file_handler])

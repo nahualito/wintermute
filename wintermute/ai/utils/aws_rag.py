@@ -23,6 +23,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import logging
 import os
 
 from llama_index.core import (
@@ -36,7 +37,10 @@ from llama_index.embeddings.bedrock import BedrockEmbedding
 from llama_index.llms.bedrock import Bedrock
 
 from wintermute.ai.json_types import JSONObject
-from wintermute.ai.tools_runtime import Tool, tools
+
+from .tool_factory import register_tools
+
+log = logging.getLogger(__name__)
 
 # --- Configuration ---
 PERSIST_DIR = "./storage_db"
@@ -52,7 +56,7 @@ def _initialize_rag_engine() -> BaseQueryEngine:
     if _QUERY_ENGINE:
         return _QUERY_ENGINE
 
-    print("[RAG] Initializing Hardware Oracle...")
+    log.info("[RAG] Initializing Hardware Oracle...")
 
     # 1. Setup Bedrock for LlamaIndex (Mirroring your Wintermute BedrockProvider)
     Settings.llm = Bedrock(
@@ -66,6 +70,9 @@ def _initialize_rag_engine() -> BaseQueryEngine:
 
     # 2. Load the Index (Assumes you ran the ingestion script we built earlier!)
     if not os.path.exists(PERSIST_DIR):
+        log.error(
+            f"RAG Database not found at {PERSIST_DIR}. Run ingestion script first."
+        )
         raise FileNotFoundError(
             f"RAG Database not found at {PERSIST_DIR}. Run ingestion script first."
         )
@@ -101,23 +108,5 @@ def query_manuals_handler(args: JSONObject) -> JSONObject:
         return {"error": str(e)}
 
 
-# --- Define the Tool ---
-rag_tool = Tool(
-    name="query_hardware_manuals",
-    description="Consults the internal vector database of Processor Manuals, Datasheets, and Security SOPs. Use this for questions about pinouts, voltages, registers, or specific attack procedures.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The specific technical question to ask the manuals.",
-            }
-        },
-        "required": ["query"],
-    },
-    output_schema={"type": "object", "properties": {"result": {"type": "string"}}},
-    handler=query_manuals_handler,
-)
-
 # Register immediately upon import
-tools.register(rag_tool)
+register_tools([query_manuals_handler])
