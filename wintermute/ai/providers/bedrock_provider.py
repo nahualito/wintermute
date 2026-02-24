@@ -23,67 +23,32 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from typing import Iterable, Optional
 
-import boto3
-from botocore.exceptions import ClientError
+import litellm
+
+__category__ = "AI Models"
+__description__ = (
+    "Neural routing via Amazon Bedrock (Claude, Llama, DeepSeek) using LiteLLM."
+)
 
 from ..provider import LLMProvider, ModelInfo
-from ..types import ChatRequest, ChatResponse, ToolCall, ToolSpec
-
-
-def _convert_tools_to_converse_spec(tools: Iterable[ToolSpec]) -> List[dict[str, Any]]:
-    """Converts Wintermute ToolSpecs to Bedrock Converse 'toolSpec' format."""
-    return [
-        {
-            "toolSpec": {
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": {"json": t.input_schema},
-            }
-        }
-        for t in tools
-    ]
-
-
-def _parse_converse_response(
-    output_message: dict[str, Any],
-) -> tuple[str, list[ToolCall]]:
-    """Parses the unified Converse API response into content and tool calls."""
-    content_blocks = output_message.get("content", [])
-    text_parts = []
-    tool_calls = []
-
-    for block in content_blocks:
-        if "text" in block:
-            text_parts.append(block["text"])
-        elif "toolUse" in block:
-            t_use = block["toolUse"]
-            tool_calls.append(
-                ToolCall(
-                    id=t_use["toolUseId"],
-                    name=t_use["name"],
-                    arguments=t_use["input"],
-                )
-            )
-
-    return "".join(text_parts), tool_calls
+from ..types import ChatRequest, ChatResponse, ToolCall
 
 
 @dataclass
 class BedrockProvider(LLMProvider):
     """
-    Amazon Bedrock LLM Provider using the unified Converse API.
-    Supports Claude, Llama, Mistral, and Nova with a single code path.
+    Amazon Bedrock LLM Provider using LiteLLM.
+    Supports Claude, Llama, Mistral, and Nova.
     """
 
     region: str = "us-east-1"
-    default_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    default_model: str = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
     _name: str = "bedrock"
 
     @property
@@ -91,10 +56,9 @@ class BedrockProvider(LLMProvider):
         return self._name
 
     def list_models(self) -> list[ModelInfo]:
-        # With Converse API, most modern models support tools.
         return [
             ModelInfo(
-                name="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                name="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
                 family="claude-3-5",
                 context_window=200_000,
                 supports_tools=True,
@@ -102,15 +66,15 @@ class BedrockProvider(LLMProvider):
                 supports_stream=True,
             ),
             ModelInfo(
-                name="us.deepseek.r1-v1:0",  # Check availability in your region
+                name="bedrock/us.deepseek.r1-v1:0",
                 family="deepseek-r1",
                 context_window=128_000,
-                supports_tools=True,  # Converse tries to map this; might fallback if unsupported
+                supports_tools=True,
                 supports_json=True,
                 supports_stream=True,
             ),
             ModelInfo(
-                name="meta.llama3-1-70b-instruct-v1:0",
+                name="bedrock/meta.llama3-1-70b-instruct-v1:0",
                 family="llama3",
                 context_window=128_000,
                 supports_tools=True,
@@ -120,67 +84,58 @@ class BedrockProvider(LLMProvider):
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
-        client = boto3.client("bedrock-runtime", region_name=self.region)
         model_id = req.model or self.default_model
 
-        # 1. Separate System Prompts (Converse API requires this)
-        system_prompts = []
-        messages = []
+        # litellm expects bedrock/ prefix for models if not already present
+        if not model_id.startswith("bedrock/"):
+            model_id = f"bedrock/{model_id}"
 
-        for m in req.messages:
-            if m.role == "system":
-                system_prompts.append({"text": m.content})
-            else:
-                # Map Wintermute roles to Bedrock Converse roles
-                # User -> user, Assistant -> assistant, Tool -> user (with toolResult)
-                role = "assistant" if m.role == "assistant" else "user"
+        messages = [m.__dict__ for m in req.messages]
 
-                # Simple text content handling
-                # (For robust tool result handling, Wintermute Message types would need
-                #  to support 'tool_result' blocks. For now we treat them as text.)
-                messages.append({"role": role, "content": [{"text": m.content}]})
-
-        # 2. Configure Tools
-        tool_config = None
+        tools_payload = None
         if req.tools:
-            tool_config = {
-                "tools": _convert_tools_to_converse_spec(req.tools),
-                "toolChoice": (
-                    {"auto": {}}
-                    if req.tool_choice == "auto"
-                    else {"any": {}}
-                    if req.tool_choice == "required"
-                    else {"auto": {}}  # Default
-                ),
-            }
+            tools_payload = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    },
+                }
+                for t in req.tools
+            ]
 
-        # 3. Call Bedrock Converse
         start = time.time()
         try:
-            # Build arguments dictionary to handle optional params cleanly
-            kwargs = {
-                "modelId": model_id,
-                "messages": messages,
-                "inferenceConfig": {
-                    "temperature": float(req.temperature),
-                    "maxTokens": req.max_tokens or 1024,
-                },
-            }
-            if system_prompts:
-                kwargs["system"] = system_prompts
-            if tool_config:
-                kwargs["toolConfig"] = tool_config
+            response = litellm.completion(
+                model=model_id,
+                messages=messages,
+                temperature=float(req.temperature),
+                max_tokens=req.max_tokens or 1024,
+                tools=tools_payload,
+                tool_choice=req.tool_choice if tools_payload else None,
+                aws_region_name=self.region,
+            )
 
-            response = client.converse(**kwargs)
+        except Exception as e:
+            raise RuntimeError(f"LiteLLM Bedrock completion failed: {e}") from e
 
-        except ClientError as e:
-            raise RuntimeError(f"Bedrock Converse failed: {e}") from e
+        choice = response.choices[0]
+        content_text = choice.message.content or ""
+        tool_calls = []
 
-        # 4. Parse Response
-        output_msg = response["output"]["message"]
-        content_text, tool_calls = _parse_converse_response(output_msg)
+        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=tc.function.arguments,
+                    )
+                )
 
-        usage = response.get("usage", {})
+        usage = getattr(response, "usage", {})
         latency = int((time.time() - start) * 1000)
 
         return ChatResponse(
@@ -188,15 +143,14 @@ class BedrockProvider(LLMProvider):
             tool_calls=tool_calls,
             model=model_id,
             provider=self.name,
-            prompt_tokens=usage.get("inputTokens"),
-            completion_tokens=usage.get("outputTokens"),
+            prompt_tokens=getattr(usage, "prompt_tokens", 0),
+            completion_tokens=getattr(usage, "completion_tokens", 0),
             latency_ms=latency,
         )
 
     def embed(
         self, texts: Iterable[str], model: Optional[str] = None
     ) -> list[list[float]]:
-        # Stub
         return [[0.0] * 1024 for _ in texts]
 
     def count_tokens(self, text: str, model: Optional[str] = None) -> int:

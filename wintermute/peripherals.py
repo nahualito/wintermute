@@ -74,6 +74,7 @@ class UART(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.UART,
@@ -89,12 +90,12 @@ class UART(Peripheral):
         self.stopbits = stopbits
         self.pType = pType
         self.com_port = (
-            comPort  # Port connected to the user's device to speak to the UART
-        )
+            device_path or comPort
+        )  # Port connected to the user's device to speak to the UART
 
-        super().__init__(name, pins, pType)
+        super().__init__(device_path=self.com_port, name=name, pins=pins, pType=pType)
         log.info(
-            f"Initialized UART peripheral {name} on port {comPort} with baudrate {baudrate}"
+            f"Initialized UART peripheral {name} on port {self.com_port} with baudrate {baudrate}"
         )
 
 
@@ -103,6 +104,7 @@ class Wifi(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "wlan0",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.Wifi,
@@ -122,7 +124,7 @@ class Wifi(Peripheral):
         self.band = band
         self.ipaddress = ipaddress
 
-        super().__init__(name, pins, pType)
+        super().__init__(device_path, name, pins, pType)
         log.info(f"Initialized Wifi peripheral {name} with SSID {SSID} on band {band}")
 
 
@@ -185,6 +187,7 @@ class Ethernet(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "eth0",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.Ethernet,
@@ -205,7 +208,7 @@ class Ethernet(Peripheral):
         self.speed = speed
         self.duplex = duplex
 
-        super().__init__(name, pins, pType)
+        super().__init__(device_path, name, pins, pType)
         log.info(
             f"Initialized Ethernet peripheral {name} with MAC {mac_address} at IP {ipaddress}"
         )
@@ -237,13 +240,14 @@ class JTAG(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.JTAG,
     ) -> None:
         self.pType = pType
         self.name = name
-        super().__init__(name, pins, pType)
+        super().__init__(device_path, name, pins, pType)
         log.info(f"Initialized JTAG peripheral {name}")
 
 
@@ -252,6 +256,7 @@ class Bluetooth(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "hci0",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.Bluetooth,
@@ -264,7 +269,7 @@ class Bluetooth(Peripheral):
         self.mac_address = mac_address
         self.paired_devices = paired_devices
 
-        super().__init__(name, pins, pType)
+        super().__init__(device_path, name, pins, pType)
         log.info(
             f"Initialized Bluetooth peripheral {name} with device name {device_name} and MAC {mac_address}"
         )
@@ -275,6 +280,7 @@ class USB(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.USB,
@@ -287,7 +293,7 @@ class USB(Peripheral):
         self.speed = speed
         self.role = role
 
-        super().__init__(name, pins, pType)
+        super().__init__(device_path, name, pins, pType)
         log.info(
             f"Initialized USB peripheral {name} with version {version}, speed {speed}, role {role}"
         )
@@ -305,6 +311,7 @@ class PCIe(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.PCIe,
@@ -324,7 +331,7 @@ class PCIe(Peripheral):
         self.architecture = architecture
         self.memory = memory
 
-        super().__init__(name, pins, pType)
+        super().__init__(device_path, name, pins, pType)
         log.info(
             f"Initialized PCIe peripheral {name} with version {version}, lanes {lanes}, role {role}"
         )
@@ -403,6 +410,7 @@ class TPM(Peripheral):
 
     def __init__(
         self,
+        device_path: str = "/dev/tpm0",
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.TPM,
@@ -410,12 +418,13 @@ class TPM(Peripheral):
         """Initialize TPM peripheral with pin mappings and type.
 
         Args:
+            device_path (str): Path to the TPM device file.
             name (str): Name of the TPM peripheral.
             pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
             pType (PeripheralType): Type of the peripheral, defaults to PeripheralType.TPM.
         """
-        super().__init__(name, pins, pType)
-        log.info(f"Initialized TPM peripheral {name}")
+        super().__init__(device_path, name, pins, pType)
+        log.info(f"Initialized TPM peripheral {name} at {device_path}")
 
     def _tpm_input_header(self, tag: int, len: int, code: int) -> bytes:
         """10 byte header that will prepend every command sent from the host to the TPM"""

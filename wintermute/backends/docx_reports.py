@@ -52,6 +52,9 @@ import logging
 
 log = logging.getLogger(__name__)
 
+__category__ = "Reporting"
+__description__ = "Automated DOCX report generation using Wintermute templates."
+
 
 def _vuln_to_context(v: Vulnerability, context_path: Optional[str]) -> Dict[str, Any]:
     """

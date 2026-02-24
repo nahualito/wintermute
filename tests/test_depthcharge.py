@@ -148,7 +148,7 @@ dc_mod = importlib.import_module("wintermute.backends.depthcharge")
 # Typed test scaffolding
 # ──────────────────────────────────────────────────────────────────────────────
 class PeripheralLike(Protocol):
-    device: str
+    device_path: str
     workspace: str
     name: str
     vulnerabilities: List[Any]
@@ -159,7 +159,7 @@ class PeripheralLike(Protocol):
 
 @dataclass
 class DummyPeripheral:
-    device: str = "/dev/ttyUSB0:115200"
+    device_path: str = "/dev/ttyUSB0:115200"
     workspace: str = "./wm_workspace_test"
     name: str = "UART0"
     vulnerabilities: List[Any] = field(default_factory=list)

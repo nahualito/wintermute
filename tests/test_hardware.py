@@ -46,7 +46,7 @@ def test_processor_architecture_initialization() -> None:
 
 def test_uart_peripheral() -> None:
     pins = {"tx": "PA9", "rx": "PA10"}
-    uart = UART(name="uart1", pins=pins, baudrate=115200)
+    uart = UART(device_path="/dev/ttyUSB0", name="uart1", pins=pins, baudrate=115200)
 
     assert uart.name == "uart1"
     assert uart.pType == PeripheralType.UART
@@ -55,7 +55,7 @@ def test_uart_peripheral() -> None:
 
 
 def test_tpm_packet_generation() -> None:
-    tpm = TPM(name="tpm0")
+    tpm = TPM(device_path="/dev/tpm0", name="tpm0")
 
     # Test Request Header generation (Tag, Len, Code)
     # Tag=0x00C1 (Command), Len=10, Ordinal=0x000000AA
@@ -69,7 +69,7 @@ def test_tpm_packet_generation() -> None:
 
 
 def test_tpm_extend_body() -> None:
-    tpm = TPM(name="tpm0")
+    tpm = TPM(device_path="/dev/tpm0", name="tpm0")
     dummy_digest = b"A" * 20
     pcr_index = 5
 

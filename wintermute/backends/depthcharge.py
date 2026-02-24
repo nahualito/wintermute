@@ -69,13 +69,13 @@ class PeripheralLike(Protocol):
     """A minimal Protocol for Wintermute Peripheral-like objects.
 
     Attributes:
-        device (str): Device connection string (e.g., COM port or /dev path).
+        device_path (str): Device connection string (e.g., COM port or /dev path).
         workspace (str): Path to the workspace directory.
         name (str): Name of the peripheral/device.
         vulnerabilities (List[Any]): List to store found vulnerabilities.
     """
 
-    device: str
+    device_path: str
     workspace: str
     name: str
     vulnerabilities: List[Any]
@@ -609,7 +609,7 @@ class DepthchargePeripheralAgent:
         arch: Optional[str] = None,
     ) -> None:
         self.peripheral: PeripheralLike = peripheral
-        self.device: str = getattr(peripheral, "device", "/dev/ttyUSB0:115200")
+        self.device: str = getattr(peripheral, "device_path", "/dev/ttyUSB0:115200")
         self.workspace: Path = Path(getattr(peripheral, "workspace", "./wm_workspace"))
         self.timeout: float = default_timeout
         self.arch: Optional[str] = arch

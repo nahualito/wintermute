@@ -61,13 +61,15 @@ def peripherals_mod() -> types.ModuleType:
 
 def test_tpm_constructs(TPM: Type[Any]) -> None:
     tpm = TPM(
-        name="tpm1", pins={"mosi": "P1", "miso": "P2", "sclk": "P3", "gnd": "GND"}
+        device_path="/dev/tpm0",
+        name="tpm1",
+        pins={"mosi": "P1", "miso": "P2", "sclk": "P3", "gnd": "GND"},
     )
     assert getattr(tpm, "name") == "tpm1"
 
 
 def test_tpm_input_header(TPM: Type[Any]) -> None:
-    tpm = TPM()
+    tpm = TPM(device_path="/dev/tpm0")
     # Expect big-endian: tag (H), paramSize (I), ordinal (I)
     packed = tpm._tpm_input_header(0x00C1, 30, 0x00000046)
     assert isinstance(packed, (bytes, bytearray))
@@ -76,7 +78,7 @@ def test_tpm_input_header(TPM: Type[Any]) -> None:
 
 
 def test_tpm_output_header(TPM: Type[Any]) -> None:
-    tpm = TPM()
+    tpm = TPM(device_path="/dev/tpm0")
     # Expect big-endian: tag (H), paramSize (I), returnCode (I)
     packed = tpm._tpm_output_header(0x00C4, 24, 0x00000000)
     assert packed == struct.pack(">HII", 0x00C4, 24, 0x00000000)
@@ -85,7 +87,7 @@ def test_tpm_output_header(TPM: Type[Any]) -> None:
 def test_tpm_pcr_read_bodies(TPM: type) -> None:
     import struct
 
-    tpm = TPM()
+    tpm = TPM(device_path="/dev/tpm0")
     req = tpm._tpm_pcr_read_req_body(pcr_index=7)
     assert req == struct.pack(">I", 7)
 
@@ -99,7 +101,7 @@ def test_tpm_pcr_read_bodies(TPM: type) -> None:
 
 
 def test_tpm_pcr_extend_bodies(TPM: Type[Any]) -> None:
-    tpm = TPM()
+    tpm = TPM(device_path="/dev/tpm0")
     # request: pcrIndex (I) + inDigest (20s)
     req = tpm._tpm_pcr_extend_req_body(pcr_index=3, in_digest=b"\x11" * 20)
     assert req == struct.pack(">I20s", 3, b"\x11" * 20)
@@ -110,7 +112,7 @@ def test_tpm_pcr_extend_bodies(TPM: Type[Any]) -> None:
 
 
 def test_tpm_random_and_auth_bodies(TPM: Type[Any]) -> None:
-    tpm = TPM()
+    tpm = TPM(device_path="/dev/tpm0")
     # get random: size (I)
     req_rnd = tpm._tpm_get_rnd_req_body(num_bytes=16)
     assert req_rnd == struct.pack(">I", 16)

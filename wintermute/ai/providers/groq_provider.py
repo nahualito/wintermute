@@ -27,42 +27,24 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional, cast
+from typing import Iterable, Optional
+
+import litellm
+
+__category__ = "AI Models"
+__description__ = "Inference routing via Groq Cloud (Llama, Mixtral) using LiteLLM."
 
 from ..provider import LLMProvider, ModelInfo
 from ..types import ChatRequest, ChatResponse, ToolCall
 
-# ---- Dynamic import as Any ----
-try:
-    import importlib as _importlib
-
-    _groq_mod = _importlib.import_module("groq")
-    GroqClient: Any = getattr(_groq_mod, "Groq")
-    _HAS_GROQ = True
-except Exception:
-    GroqClient = None  # typed as Any below
-    _HAS_GROQ = False
-
 
 @dataclass
 class GroqProvider(LLMProvider):
-    """Groq LLM Provider for Wintermute AI.
-
-    Example:
-        >>> from wintermute.ai import llms
-        >>> from wintermute.ai.providers.groq_provider import GroqProvider, register
-        >>> groq_prov = GroqProvider(api_key="your_groq_api_key")
-        >>> llms.register(groq_prov)
-
-    Note: Groq SDK must be installed separately with `pip install groq`.
-
-    Attributes:
-        api_key (Optional[str]): Groq API key for authentication.
-    """
+    """Groq LLM Provider for Wintermute AI using LiteLLM."""
 
     api_key: Optional[str] = None
     _name: str = "groq"
-    _default_model: str = "llama-3.1-8b-instant"
+    _default_model: str = "groq/llama-3.3-70b-versatile"
 
     @property
     def name(self) -> str:
@@ -71,34 +53,28 @@ class GroqProvider(LLMProvider):
     def list_models(self) -> list[ModelInfo]:
         """List available Groq models."""
         return [
-            ModelInfo("llama-3.1-8b-instant", "llama-3.1", 128_000, True, True, True),
             ModelInfo(
-                "llama-3.1-70b-versatile", "llama-3.1", 128_000, True, True, True
+                "groq/llama-3.3-70b-versatile", "llama-3.3", 128_000, True, True, True
+            ),
+            ModelInfo(
+                "groq/llama-3.1-70b-versatile", "llama-3.1", 128_000, True, True, True
+            ),
+            ModelInfo(
+                "groq/llama-3.1-8b-instant", "llama-3.1", 128_000, True, True, True
             ),
         ]
 
     def chat(self, req: ChatRequest) -> ChatResponse:
-        """Send a chat completion request to Groq LLM.
+        """Send a chat completion request to Groq using LiteLLM."""
+        model_id = req.model or self._default_model
 
-        Args:
-            req (ChatRequest): The chat request containing messages and parameters.
-        Returns:
-            ChatResponse: The response from the Groq LLM.
-        """
-        # Mock path (SDK not present)
-        if not _HAS_GROQ:
-            mock_text = "(mock groq) " + (
-                req.messages[-1].content if req.messages else ""
-            )
-            return ChatResponse(
-                content=mock_text,
-                model=req.model or self._default_model,
-                provider=self.name,
-            )
+        # litellm expects groq/ prefix for models if not already present
+        if not model_id.startswith("groq/"):
+            model_id = f"groq/{model_id}"
 
-        client: Any = GroqClient(api_key=self.api_key)
+        messages = [m.__dict__ for m in req.messages]
 
-        tools_payload: Any = None
+        tools_payload = None
         if req.tools:
             tools_payload = [
                 {
@@ -113,52 +89,47 @@ class GroqProvider(LLMProvider):
             ]
 
         start = time.time()
-        completion: Any = cast(Any, client.chat.completions).create(
-            model=req.model or self._default_model,
-            messages=cast(Any, [m.__dict__ for m in req.messages]),
-            temperature=req.temperature,
-            max_tokens=req.max_tokens,
-            tools=tools_payload,
-            tool_choice=req.tool_choice if tools_payload is not None else "none",
-            response_format={"type": "json_object"}
-            if req.response_format == "json"
-            else None,
-            stream=False,
-        )
+        try:
+            response = litellm.completion(
+                model=model_id,
+                messages=messages,
+                temperature=float(req.temperature),
+                max_tokens=req.max_tokens,
+                tools=tools_payload,
+                tool_choice=req.tool_choice if tools_payload else None,
+                api_key=self.api_key,
+                response_format={"type": "json_object"}
+                if req.response_format == "json"
+                else None,
+            )
 
-        choice: Any = completion.choices[0]
-        message_text: str = choice.message.content or ""  # renamed from `content`
-        tool_calls: Optional[List[ToolCall]] = None
+        except Exception as e:
+            raise RuntimeError(f"LiteLLM Groq completion failed: {e}") from e
 
-        tc_list: Any = getattr(choice.message, "tool_calls", None)
-        if tc_list:
-            tool_calls = []
-            for tc in tc_list:
-                args = tc.function.arguments
-                if isinstance(args, str):
-                    import json
+        choice = response.choices[0]
+        content_text = choice.message.content or ""
+        tool_calls = []
 
-                    try:
-                        arguments = json.loads(args)
-                    except Exception:
-                        arguments = {}
-                else:
-                    arguments = args
+        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
                 tool_calls.append(
-                    ToolCall(id=tc.id, name=tc.function.name, arguments=arguments)
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=tc.function.arguments,
+                    )
                 )
-            message_text = ""
 
+        usage = getattr(response, "usage", {})
         latency = int((time.time() - start) * 1000)
-        usage: Any = getattr(completion, "usage", None)
 
         return ChatResponse(
-            content=message_text,
+            content=content_text,
             tool_calls=tool_calls,
-            model=getattr(completion, "model", req.model or self._default_model),
+            model=model_id,
             provider=self.name,
-            prompt_tokens=(usage.prompt_tokens if usage is not None else None),
-            completion_tokens=(usage.completion_tokens if usage is not None else None),
+            prompt_tokens=getattr(usage, "prompt_tokens", 0),
+            completion_tokens=getattr(usage, "completion_tokens", 0),
             latency_ms=latency,
         )
 

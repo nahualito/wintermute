@@ -32,6 +32,9 @@ from urllib.parse import urljoin
 
 import requests
 
+__category__ = "Ticketing"
+__description__ = "Vulnerability & incident tracking via Bugzilla REST API."
+
 if TYPE_CHECKING:
     # type-only to avoid circular imports at runtime
     from wintermute.tickets import Comment, TicketData
@@ -428,7 +431,7 @@ class BugzillaBackend:
             )
             self._check(r, "update bug")
 
-    def add_comment(self, ticket_id: str, comment_obj: Any) -> None:
+    def add_comment(self, ticket_id: str, comment: Any) -> None:
         """
         Adapter method for Ticket.comment().
 
@@ -447,14 +450,14 @@ class BugzillaBackend:
         text: str
         author: Optional[str] = None
 
-        if isinstance(comment_obj, Comment):
+        if isinstance(comment, Comment):
             # Normal path: real Comment instance
-            text = str(getattr(comment_obj, "text", ""))
-            a = getattr(comment_obj, "author", None)
+            text = str(getattr(comment, "text", ""))
+            a = getattr(comment, "author", None)
             author = str(a) if isinstance(a, str) else None
         else:
             # Fallback: treat it as a string-like payload
-            text = str(comment_obj)
+            text = str(comment)
 
         self.comment(ticket_id, text=text, author=author)
 

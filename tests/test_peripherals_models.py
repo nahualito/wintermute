@@ -93,7 +93,7 @@ def Bluetooth(peripherals_mod: types.ModuleType) -> Type[Any]:
 
 # ----- UART -----
 def test_uart_defaults_and_types(UART: Type[Any], PeripheralType: Type[Any]) -> None:
-    u = UART()
+    u = UART(device_path="/dev/ttyUSB0")
     assert u.pType == PeripheralType.UART
     assert isinstance(getattr(u, "baudrate"), int)
     assert isinstance(getattr(u, "bytesize"), int)
@@ -106,7 +106,7 @@ def test_uart_defaults_and_types(UART: Type[Any], PeripheralType: Type[Any]) -> 
 
 def test_uart_pin_mapping_passthrough(UART: Type[Any]) -> None:
     pins: Dict[str, str] = {"tx": "P1", "rx": "P2", "gnd": "GND"}
-    u = UART(name="dbg", pins=pins)
+    u = UART(device_path="/dev/ttyUSB0", name="dbg", pins=pins)
     assert getattr(u, "name") == "dbg"
     # If your Peripheral stores pins, verify they’re present
     if hasattr(u, "pins"):
@@ -115,7 +115,7 @@ def test_uart_pin_mapping_passthrough(UART: Type[Any]) -> None:
 
 # ----- Wifi -----
 def test_wifi_defaults_and_variants(Wifi: Type[Any], PeripheralType: Type[Any]) -> None:
-    w = Wifi()
+    w = Wifi(device_path="wlan0")
     assert w.pType == PeripheralType.Wifi
     assert isinstance(w.SSID, str)
     assert isinstance(w.password, str)
@@ -128,19 +128,20 @@ def test_wifi_defaults_and_variants(Wifi: Type[Any], PeripheralType: Type[Any]) 
     )
 
     # IPv4/IPv6/None/str variants
-    v4 = Wifi(ipaddress=ipaddress.IPv4Address("10.0.0.5"))
+    v4 = Wifi(device_path="wlan0", ipaddress=ipaddress.IPv4Address("10.0.0.5"))
     assert isinstance(v4.ipaddress, ipaddress.IPv4Address)
-    v6 = Wifi(ipaddress=ipaddress.IPv6Address("::1"))
+    v6 = Wifi(device_path="wlan0", ipaddress=ipaddress.IPv6Address("::1"))
     assert isinstance(v6.ipaddress, ipaddress.IPv6Address)
-    none = Wifi(ipaddress=None)
+    none = Wifi(device_path="wlan0", ipaddress=None)
     assert none.ipaddress is None
-    as_str = Wifi(ipaddress="192.168.1.77")
+    as_str = Wifi(device_path="wlan0", ipaddress="192.168.1.77")
     assert isinstance(as_str.ipaddress, str)
 
 
 # ----- Ethernet -----
 def test_ethernet_basic_fields(Ethernet: Type[Any], PeripheralType: Type[Any]) -> None:
     e = Ethernet(
+        device_path="eth0",
         name="eth0",
         mac_address="00:11:22:33:44:55",
         ipaddress=ipaddress.IPv4Address("192.168.0.10"),
@@ -159,13 +160,20 @@ def test_ethernet_basic_fields(Ethernet: Type[Any], PeripheralType: Type[Any]) -
 
 def test_ethernet_union_params(Ethernet: Type[Any]) -> None:
     e1 = Ethernet(
-        ipaddress="10.0.0.9", subnet_mask="255.255.255.0", gateway=None, dns=None
+        device_path="eth0",
+        ipaddress="10.0.0.9",
+        subnet_mask="255.255.255.0",
+        gateway=None,
+        dns=None,
     )
     assert isinstance(e1.ipaddress, str)
     assert isinstance(e1.subnet_mask, str)
 
     e2 = Ethernet(
-        ipaddress=None, subnet_mask=None, gateway=ipaddress.IPv6Address("::1")
+        device_path="eth0",
+        ipaddress=None,
+        subnet_mask=None,
+        gateway=ipaddress.IPv6Address("::1"),
     )
     assert e2.ipaddress is None
     assert isinstance(e2.gateway, ipaddress.IPv6Address)
@@ -174,14 +182,14 @@ def test_ethernet_union_params(Ethernet: Type[Any]) -> None:
 # ----- JTAG -----
 def test_jtag_minimal(JTAG: Type[Any], PeripheralType: Type[Any]) -> None:
     # Current code sets pType and name; per-pin convenience fields were removed in this version.
-    j = JTAG(name="jtag1", pins={"tck": "P1"})
+    j = JTAG(device_path="jtag0", name="jtag1", pins={"tck": "P1"})
     assert j.pType == PeripheralType.JTAG
     assert getattr(j, "name") == "jtag1"
 
 
 # ----- Bluetooth -----
 def test_bluetooth_defaults(Bluetooth: Type[Any], PeripheralType: Type[Any]) -> None:
-    b = Bluetooth()
+    b = Bluetooth(device_path="hci0")
     assert b.pType == PeripheralType.Bluetooth
     assert isinstance(b.device_name, str)
     assert isinstance(b.mac_address, str)

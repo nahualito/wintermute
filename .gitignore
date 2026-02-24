@@ -203,3 +203,6 @@ artifacts/*
 
 # No jupyter notebooks on git repo
 *.ipynb
+
+# No clinerules on git repo
+.clinerules

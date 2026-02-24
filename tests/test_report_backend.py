@@ -67,7 +67,7 @@ class _FakeBackend(ReportBackend):
 
     def add_test_run(
         self,
-        test_run: TestCaseRun,
+        run: TestCaseRun,
         test_case: TestCase | None = None,
         *,
         context_path: Optional[str] = None,
@@ -120,6 +120,7 @@ def test_report_register_render_save_and_counts(tmp_path: Any) -> None:
         ],
     )
     periph = Peripheral(
+        device_path="/dev/ttyUSB0",
         name="UART0",
         pType="UART",
         vulnerabilities=[
@@ -156,6 +157,7 @@ def test_collect_vulnerabilities_on_operation_root_and_contexts() -> None:
         ],
     )
     periph = Peripheral(
+        device_path="/dev/ttyUSB1",
         name="DBG",
         pType="UART",
         vulnerabilities=[

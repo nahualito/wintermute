@@ -36,6 +36,7 @@ class TestTPMCommandBuilder(unittest.TestCase):
 class TestTPM(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_transport = MagicMock(spec=TPMTransport)
+        self.mock_transport.device_path = "/dev/tpm0"
         self.tpm = tpm20(transport=self.mock_transport)
 
     def test_execute_calls_transport(self) -> None:

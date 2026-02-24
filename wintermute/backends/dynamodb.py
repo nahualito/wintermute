@@ -27,6 +27,9 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 import boto3
+
+__category__ = "Storage"
+__description__ = "Cloud-native persistence via Amazon DynamoDB."
 from botocore.exceptions import ClientError
 
 

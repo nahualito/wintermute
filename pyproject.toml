@@ -14,7 +14,8 @@ dependencies = [
   "ipaddress",
   "tinydb",
   "pyserial",
-  "cmd2",
+  "prompt-toolkit",
+  "rich",
   "argparse",
   "importlib",
   "typing",
@@ -32,6 +33,7 @@ dependencies = [
   "boto3-stubs",
   "openai",
   "groq",
+  "litellm",
   "mcp",
   "asyncio",
   "pytest-asyncio",
@@ -44,6 +46,7 @@ dependencies = [
   "mkdocs-gen-files",
   "mkdocs-literate-nav",
   "mkdocs-section-index",
+  "pytest",  # Added pytest here
 ]
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
@@ -129,11 +132,6 @@ format = [
 dependencies = [
   "pylink-square @ git+https://github.com/square/pylink.git#egg=pylink-square",
 ]
-
-[tool.hatch.envs.production]
-dev-mode = false
-features = []
-path = ".venv"
 
 [tool.hatch.version]
 path = "wintermute/__init__.py"

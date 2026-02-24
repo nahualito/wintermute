@@ -30,6 +30,9 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
+__category__ = "Storage"
+__description__ = "Local JSON-based flat file persistence for offline ops."
+
 
 class JsonFileBackend:
     """Stores operations as JSON files in a specific directory.

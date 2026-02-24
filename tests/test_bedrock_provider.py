@@ -37,19 +37,19 @@ def provider() -> BedrockProvider:
 
 
 def test_bedrock_converse_formatting(provider: BedrockProvider) -> None:
-    """Test mapping of Wintermute messages to Bedrock Converse format."""
+    """Test mapping of Wintermute messages to LiteLLM format for Bedrock."""
 
-    # Mock boto3 client
-    mock_boto = MagicMock()
+    # Mock litellm response
+    mock_choice = MagicMock()
+    mock_choice.message.content = "Hello user"
+    mock_choice.message.tool_calls = None
 
-    # Mock response
-    mock_response = {
-        "output": {"message": {"content": [{"text": "Hello user"}]}},
-        "usage": {"inputTokens": 10, "outputTokens": 5},
-    }
-    mock_boto.converse.return_value = mock_response
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_response.usage.prompt_tokens = 10
+    mock_response.usage.completion_tokens = 5
 
-    with patch("boto3.client", return_value=mock_boto):
+    with patch("litellm.completion", return_value=mock_response) as mock_completion:
         # Create a complex request
         req = ChatRequest(
             messages=[
@@ -68,46 +68,51 @@ def test_bedrock_converse_formatting(provider: BedrockProvider) -> None:
 
         response = provider.chat(req)
 
-        # Verify arguments passed to boto3
-        args, kwargs = mock_boto.converse.call_args
+        # Verify arguments passed to litellm
+        args, kwargs = mock_completion.call_args
 
-        # 1. Check System Prompt extraction
-        assert kwargs["system"] == [{"text": "Be helpful"}]
+        # 1. Check Model routing
+        assert kwargs["model"] == "bedrock/anthropic.claude-3"
 
         # 2. Check Message formatting
-        assert kwargs["messages"] == [{"role": "user", "content": [{"text": "Hi"}]}]
+        assert kwargs["messages"] == [
+            {
+                "role": "system",
+                "content": "Be helpful",
+                "tool_name": None,
+                "tool_call_id": None,
+            },
+            {"role": "user", "content": "Hi", "tool_name": None, "tool_call_id": None},
+        ]
 
         # 3. Check Tool Config
-        assert "toolConfig" in kwargs
-        assert kwargs["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+        assert "tools" in kwargs
+        assert kwargs["tools"][0]["function"]["name"] == "get_weather"
 
         # 4. Check Response parsing
         assert response.content == "Hello user"
 
 
 def test_bedrock_tool_call_parsing(provider: BedrockProvider) -> None:
-    """Test parsing of toolUse blocks from Bedrock response."""
+    """Test parsing of toolUse blocks from LiteLLM response."""
 
-    mock_boto = MagicMock()
-    mock_response = {
-        "output": {
-            "message": {
-                "content": [
-                    {"text": "Thinking..."},
-                    {
-                        "toolUse": {
-                            "toolUseId": "call_123",
-                            "name": "calc",
-                            "input": {"x": 1},
-                        }
-                    },
-                ]
-            }
-        }
-    }
-    mock_boto.converse.return_value = mock_response
+    # Mock tool call
+    mock_tool_call = MagicMock()
+    mock_tool_call.id = "call_123"
+    mock_tool_call.function.name = "calc"
+    mock_tool_call.function.arguments = {"x": 1}
 
-    with patch("boto3.client", return_value=mock_boto):
+    # Mock litellm response
+    mock_choice = MagicMock()
+    mock_choice.message.content = "Thinking..."
+    mock_choice.message.tool_calls = [mock_tool_call]
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_response.usage.prompt_tokens = 10
+    mock_response.usage.completion_tokens = 5
+
+    with patch("litellm.completion", return_value=mock_response):
         req = ChatRequest(messages=[Message(role="user", content="calc 1")])
         resp = provider.chat(req)
 

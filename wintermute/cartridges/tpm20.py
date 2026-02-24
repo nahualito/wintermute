@@ -23,16 +23,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import argparse
 import datetime
 import struct
 from enum import Enum, unique
-
-from cmd2 import (
-    Cmd2ArgumentParser,
-    CommandSet,
-    with_argparser,
-    with_default_category,
-)
+from typing import Optional
 
 event_timestamp = (
     str(datetime.datetime.now(datetime.UTC))
@@ -160,17 +155,21 @@ class TPMCommandBuilder:
         return header + parameters
 
 
-@with_default_category("tpm20")
-class tpm20(CommandSet):
+class tpm20:
     """Main interface for executing TPM commands
 
     Attributes:
         transport (TPMTransport): Transport layer for TPM communication.
     """
 
-    def __init__(self, transport: TPMTransport = TPMTransport()):
-        self.transport = transport
-        super().__init__()
+    def __init__(self, transport: Optional[TPMTransport] = None):
+        self.transport = transport or TPMTransport()
+        self.options = {
+            "device_path": {
+                "value": self.transport.device_path,
+                "description": "Path to the TPM device file",
+            }
+        }
 
     def execute(self, command: TPMCommands, parameters: bytes = b"") -> bytes:
         """Execute a TPM command with given parameters.
@@ -195,10 +194,6 @@ class tpm20(CommandSet):
         resp = self.execute(TPMCommands.TPMCommands_GetRandom, param)
         return resp
 
-    def create_primary(self, hierarchy: int = 0x40000001) -> bytes:
-        # Placeholder structure — full creation needs TPMT_PUBLIC etc.
-        raise NotImplementedError("Implement CreatePrimary with TPM structures.")
-
     def read_public(self, handle: int) -> bytes:
         """Read the public area of an object in the TPM.
 
@@ -208,21 +203,39 @@ class tpm20(CommandSet):
         param = struct.pack(">I", handle)
         return self.execute(TPMCommands.TPMCommands_ReadPublic, param)
 
-    """REPL commands added here for console use"""
-    tpm20_parser = Cmd2ArgumentParser()
-    tpm20_parser.add_argument(
-        "-p", "--public", action="store_true", help="Retrieve publi key from the TPM"
-    )
-    tpm20_parser.add_argument(
-        "-r", "--random", action="store_true", help="Get random bytes from the TPM"
-    )
+    def do_tpm20(self, *args: str) -> None:
+        """Execute TPM commands. Use -p to read public key, -r to get random bytes."""
+        parser = argparse.ArgumentParser(prog="tpm20", add_help=False)
+        parser.add_argument(
+            "-p",
+            "--public",
+            action="store_true",
+            help="Retrieve public key from the TPM",
+        )
+        parser.add_argument(
+            "-r", "--random", action="store_true", help="Get random bytes from the TPM"
+        )
+        parser.add_argument("-h", "--help", action="store_true", help="Show help")
 
-    @with_argparser(tpm20_parser)
-    def do_tpm20(self, args) -> None:  # type: ignore
-        """Execute TPM commands.
-        Use -p to read public key, -r to get random bytes.
-        """
-        if args.public:
-            handle = 0x81000000  # Example handle, replace with actual
-            public_key = self.read_public(handle)
-            print(public_key.hex())
+        try:
+            parsed_args = parser.parse_args(args)
+            if parsed_args.help:
+                parser.print_help()
+                return
+
+            if parsed_args.public:
+                handle = 0x81000000  # Example handle
+                public_key = self.read_public(handle)
+                print(f"Public key (hex): {public_key.hex()}")
+
+            if parsed_args.random:
+                random_bytes = self.get_random(16)
+                print(f"Random bytes (hex): {random_bytes.hex()}")
+
+            if not any([parsed_args.public, parsed_args.random]):
+                parser.print_help()
+
+        except SystemExit:
+            pass
+        except Exception as e:
+            print(f"Error: {e}")

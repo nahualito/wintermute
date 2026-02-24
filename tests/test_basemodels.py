@@ -150,22 +150,26 @@ def test_eq_and_hash_based_on_to_dict() -> None:
 
 def test_peripheral_pType_coercion_from_enum_str_int_and_default() -> None:
     # Enum direct
-    p_enum = Peripheral(name="Uart", pType=PeripheralType.UART)
+    p_enum = Peripheral(
+        device_path="/dev/ttyUSB0", name="Uart", pType=PeripheralType.UART
+    )
     assert p_enum.pType is PeripheralType.UART
 
     # String by name
-    p_str = Peripheral(name="Eth", pType="Ethernet")
+    p_str = Peripheral(device_path="eth0", name="Eth", pType="Ethernet")
     assert p_str.pType is PeripheralType.Ethernet
 
     # Unknown string falls back to Unknown
-    p_bad = Peripheral(name="Nope", pType="not-a-real-type")
+    p_bad = Peripheral(device_path="none", name="Nope", pType="not-a-real-type")
     assert p_bad.pType is PeripheralType.Unknown
 
     # Integer by value and bad int fallback
-    p_int = Peripheral(name="SPI", pType=int(PeripheralType.SPI.value))
+    p_int = Peripheral(
+        device_path="spi0", name="SPI", pType=int(PeripheralType.SPI.value)
+    )
     assert p_int.pType is PeripheralType.SPI
 
-    p_int_bad = Peripheral(name="BadInt", pType=999)
+    p_int_bad = Peripheral(device_path="bad", name="BadInt", pType=999)
     assert p_int_bad.pType is PeripheralType.Unknown
 
 

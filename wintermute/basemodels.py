@@ -331,12 +331,14 @@ class Peripheral(BaseModel):
 
     def __init__(
         self,
+        device_path: str,
         name: str = "",
         pins: Dict[Any, Any] | None = None,
         pType: PeripheralType | str | int = PeripheralType.Unknown,
         vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
         workspace: str = "",
     ) -> None:
+        self.device_path = device_path
         self.name = name
         self.pins = dict(pins) if pins else {}
         self.workspace = workspace
