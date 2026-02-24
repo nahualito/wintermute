@@ -229,3 +229,43 @@ def test_pentest_inherits_and_round_trip(tmp_path: Path, monkeypatch: Any) -> No
 
     assert pt2.analysts[0].userid == "pentester"
     assert pt2.awsaccounts[0].account_id == "444455556666"
+
+
+def test_operation_deletion_methods() -> None:
+    op = core.Operation("DeleteOp")
+    op.addAnalyst("Bob", "bsmith", "bob@example.com")
+    op.addDevice("host1", "127.0.0.1")
+    op.addUser("uid1", "User One", "u1@example.com", ["TeamA"])
+    op.addAWSAccount("aws-prod", account_id="123456789012")
+
+    # Deletions
+    assert op.delAnalyst("bsmith") is True
+    assert len(op.analysts) == 0
+    assert op.delAnalyst("bsmith") is False
+
+    assert op.delDevice("host1") is True
+    assert len(op.devices) == 0
+    assert op.delDevice("host1") is False
+
+    assert op.delUser("uid1") is True
+    assert len(op.users) == 0
+    assert op.delUser("uid1") is False
+
+    # Cloud Deletion by name
+    assert op.delCloudAccount("aws-prod") is True
+    assert len(op.cloud_accounts) == 0
+
+    op.addAWSAccount("aws-prod-2", account_id="999")
+    assert op.delAWSAccount("999") is True
+    assert len(op.cloud_accounts) == 0
+
+
+def test_operation_get_device_by_hostname() -> None:
+    op = core.Operation("GetOp")
+    op.addDevice("host1", "127.0.0.1")
+
+    d = op.getDeviceByHostname("host1")
+    assert d is not None
+    assert d.hostname == "host1"
+
+    assert op.getDeviceByHostname("nonexistent") is None
