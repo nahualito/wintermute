@@ -112,7 +112,6 @@ features = [
   "checks",
   "docs",
   "tests",
-  "setuptools",
 ]
 path = ".venv"
 
