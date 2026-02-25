@@ -40,3 +40,7 @@ class StorageBackend(Protocol):
     def list_all(self) -> List[str]:
         """Optional: Return list of available operation IDs/Names."""
         ...
+
+    def delete(self, operation_id: str) -> bool:
+        """Optional: Delete an operation by ID/Name."""
+        ...

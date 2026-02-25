@@ -150,3 +150,11 @@ class DynamoDBBackend:
         except Exception as e:
             print(f"DynamoDB List Error: {e}")
             return []
+
+    def delete(self, operation_id: str) -> bool:
+        try:
+            self.table.delete_item(Key={self.partition_key: operation_id})
+            return True
+        except ClientError as e:
+            print(f"DynamoDB Delete Error: {e}")
+            return False

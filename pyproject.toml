@@ -68,7 +68,7 @@ tests = [
 ]
 
 [project.scripts]
-wintermute = "wintermute.WintermuteREPL:main"
+wintermute = "wintermute.WintermuteConsole:main"
 
 [tool.coverage.report]
 exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]

@@ -36,9 +36,10 @@ import ipaddress
 import logging
 import struct
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from .basemodels import Peripheral, PeripheralType
+from .findings import Vulnerability
 from .hardware import Architecture, Memory, Processor
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class UART(Peripheral):
         parity: str = "N",
         stopbits: int = 1,
         comPort: str = "",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.baudrate = baudrate
         self.bytesize = bytesize
@@ -93,7 +95,13 @@ class UART(Peripheral):
             device_path or comPort
         )  # Port connected to the user's device to speak to the UART
 
-        super().__init__(device_path=self.com_port, name=name, pins=pins, pType=pType)
+        super().__init__(
+            device_path=self.com_port,
+            name=name,
+            pins=pins,
+            pType=pType,
+            vulnerabilities=vulnerabilities,
+        )
         log.info(
             f"Initialized UART peripheral {name} on port {self.com_port} with baudrate {baudrate}"
         )
@@ -116,6 +124,7 @@ class Wifi(Peripheral):
         | ipaddress.IPv4Address
         | ipaddress.IPv6Address
         | None = "127.0.0.1",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.pType = pType
         self.SSID = SSID
@@ -124,7 +133,9 @@ class Wifi(Peripheral):
         self.band = band
         self.ipaddress = ipaddress
 
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(f"Initialized Wifi peripheral {name} with SSID {SSID} on band {band}")
 
 
@@ -198,6 +209,7 @@ class Ethernet(Peripheral):
         dns: str | ipaddress.IPv4Address | ipaddress.IPv6Address | None = None,
         speed: str = "1Gbps",
         duplex: str = "full",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.pType = pType
         self.mac_address = mac_address
@@ -208,7 +220,9 @@ class Ethernet(Peripheral):
         self.speed = speed
         self.duplex = duplex
 
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(
             f"Initialized Ethernet peripheral {name} with MAC {mac_address} at IP {ipaddress}"
         )
@@ -244,10 +258,13 @@ class JTAG(Peripheral):
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.JTAG,
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.pType = pType
         self.name = name
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(f"Initialized JTAG peripheral {name}")
 
 
@@ -263,13 +280,16 @@ class Bluetooth(Peripheral):
         device_name: str = "",
         mac_address: str = "",
         paired_devices: list[str] = [],
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.pType = pType
         self.device_name = device_name
         self.mac_address = mac_address
         self.paired_devices = paired_devices
 
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(
             f"Initialized Bluetooth peripheral {name} with device name {device_name} and MAC {mac_address}"
         )
@@ -287,13 +307,16 @@ class USB(Peripheral):
         version: str = "2.0",
         speed: str = "480Mbps",
         role: str = "host",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.pType = pType
         self.version = version
         self.speed = speed
         self.role = role
 
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(
             f"Initialized USB peripheral {name} with version {version}, speed {speed}, role {role}"
         )
@@ -322,6 +345,7 @@ class PCIe(Peripheral):
         | None = None,  # CPU or SoC connected via PCIe or in the PCIe device
         architecture: Architecture | None = None,
         memory: Memory | None = None,
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         self.pType = pType
         self.version = version
@@ -331,7 +355,9 @@ class PCIe(Peripheral):
         self.architecture = architecture
         self.memory = memory
 
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(
             f"Initialized PCIe peripheral {name} with version {version}, lanes {lanes}, role {role}"
         )
@@ -414,6 +440,7 @@ class TPM(Peripheral):
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.TPM,
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
         """Initialize TPM peripheral with pin mappings and type.
 
@@ -423,7 +450,9 @@ class TPM(Peripheral):
             pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
             pType (PeripheralType): Type of the peripheral, defaults to PeripheralType.TPM.
         """
-        super().__init__(device_path, name, pins, pType)
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
         log.info(f"Initialized TPM peripheral {name} at {device_path}")
 
     def _tpm_input_header(self, tag: int, len: int, code: int) -> bytes:

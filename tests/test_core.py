@@ -62,6 +62,13 @@ class SimpleJsonBackend:
     def list_all(self) -> List[str]:
         return []
 
+    def delete(self, operation_id: str) -> bool:
+        p = self.base_path / f"{operation_id}.json"
+        if p.exists():
+            p.unlink()
+            return True
+        return False
+
 
 def make_full_operation(tmp_path: Path) -> core.Operation:
     op = core.Operation("TestOp")

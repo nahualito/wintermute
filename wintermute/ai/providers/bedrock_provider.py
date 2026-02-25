@@ -48,7 +48,7 @@ class BedrockProvider(LLMProvider):
     """
 
     region: str = "us-east-1"
-    default_model: str = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    default_model: str = "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
     _name: str = "bedrock"
 
     @property

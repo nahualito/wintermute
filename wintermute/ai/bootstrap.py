@@ -33,15 +33,17 @@ from pathlib import Path
 from .provider import LLMRegistry, Router, llms
 from .providers.bedrock_provider import register as register_bedrock
 from .providers.groq_provider import register as register_groq
+from .providers.huggingface_provider import register as register_huggingface
 from .providers.openai_provider import register as register_openai
 from .providers.rag_provider import RAGProvider
 
 log = logging.getLogger(__name__)
 
 
-def bootstrap_rags(registry: LLMRegistry) -> None:
+def bootstrap_rags(registry: LLMRegistry) -> list[RAGProvider]:
     """Scan knowledge bases and external repos for LlamaIndex storage and register them as RAGProviders."""
     search_paths = ["./knowledge_bases", "./external_repos"]
+    new_providers: list[RAGProvider] = []
 
     # Defaults from environment
     default_base = os.getenv("DEFAULT_RAG_PROVIDER", "bedrock")
@@ -111,8 +113,11 @@ def bootstrap_rags(registry: LLMRegistry) -> None:
                         embed_model_id=embed_model_id,
                     )
                     registry.register(rag_provider)
+                    new_providers.append(rag_provider)
                 except Exception as e:
                     log.error(f"Failed to bootstrap RAG provider {provider_id}: {e}")
+
+    return new_providers
 
 
 def init_router() -> Router:
@@ -121,6 +126,7 @@ def init_router() -> Router:
     register_bedrock(region=os.getenv("AWS_REGION", "us-east-1"))
     register_groq(api_key=os.getenv("GROQ_API_KEY"))
     register_openai(api_key=os.getenv("OPENAI_API_KEY"))
+    register_huggingface(as_name="local_embedder")
 
     # Bootstrap RAGs dynamically
     try:

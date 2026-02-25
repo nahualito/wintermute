@@ -153,7 +153,9 @@ class RAGProvider:
 
         # Load index
         storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
-        self.index: VectorStoreIndex = load_index_from_storage(storage_context)  # type: ignore
+        self.index: VectorStoreIndex = load_index_from_storage(
+            storage_context, embed_model=embed_model
+        )  # type: ignore
 
         # Create local query engine without global Settings
         self.query_engine: BaseQueryEngine = self.index.as_query_engine(

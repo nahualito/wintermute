@@ -104,7 +104,7 @@ class Service(BaseModel):
         portNumber: int = 0,
         banner: str = "",
         transport_layer: str = "",
-        vulnerabilities: list[Vulnerability] | list[dict[str, Any]] | None = None,
+        vulnerabilities: Sequence[Vulnerability | dict[str, Any]] | None = None,
     ) -> None:
         self.name = name
         self.protocol = protocol
@@ -190,6 +190,7 @@ class Device(BaseModel):
         "processor": Processor,
         "architecture": Architecture,
         "memory": Memory,
+        "vulnerabilities": Vulnerability,
     }
 
     def __init__(
@@ -207,6 +208,7 @@ class Device(BaseModel):
         memory: Memory | None = None,
         services: list[Service] | list[dict[str, Any]] | None = None,
         peripherals: list[Peripheral] | list[dict[str, Any]] | None = None,
+        vulnerabilities: Sequence[Vulnerability | dict[str, Any]] | None = None,
     ) -> None:
         self.hostname = hostname
         if isinstance(ipaddr, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
@@ -221,6 +223,7 @@ class Device(BaseModel):
         self.memory = memory
         self.services: list[Service] = []
         self.peripherals: list[Peripheral] = []
+        self.vulnerabilities: list[Vulnerability] = []
 
         for s in services or []:
             self.services.append(Service.from_dict(s) if isinstance(s, dict) else s)
@@ -229,8 +232,14 @@ class Device(BaseModel):
             self.peripherals.append(
                 Peripheral.from_dict(p) if isinstance(p, dict) else p
             )
+
+        for v in vulnerabilities or []:
+            self.vulnerabilities.append(
+                Vulnerability.from_dict(v) if isinstance(v, dict) else v
+            )
+
         log.info(
-            f"Created Device: {self.hostname} ({self.ipaddr}) with {len(self.services)} services and {len(self.peripherals)} peripherals"
+            f"Created Device: {self.hostname} ({self.ipaddr}) with {len(self.services)} services, {len(self.peripherals)} peripherals and {len(self.vulnerabilities)} vulnerabilities"
         )
 
     def addService(
@@ -293,6 +302,7 @@ class User(BaseModel):
 
     __schema__ = {
         "desktops": Device,
+        "vulnerabilities": Vulnerability,
     }
 
     def __init__(
@@ -307,6 +317,7 @@ class User(BaseModel):
         ldap_groups: Sequence[str] | None = None,
         teams: Sequence[str] | None = None,
         cloud_accounts: Sequence[str] | None = None,
+        vulnerabilities: Sequence[Vulnerability | dict[str, Any]] | None = None,
     ) -> None:
         self.uid = uid
         self.name = name
@@ -320,6 +331,13 @@ class User(BaseModel):
         self.ldap_groups: list[str] = list(ldap_groups) if ldap_groups else []
         self.cloud_accounts: list[str] = list(cloud_accounts) if cloud_accounts else []
         self.teams: list[str] = []
+        self.vulnerabilities: list[Vulnerability] = []
+
+        for v in vulnerabilities or []:
+            self.vulnerabilities.append(
+                Vulnerability.from_dict(v) if isinstance(v, dict) else v
+            )
+
         log.debug(
             f"Initializing User: {self.uid} ldap_groups: {ldap_groups} desktops: {desktops} permissions: {permissions}"
         )
@@ -330,7 +348,7 @@ class User(BaseModel):
                     self.teams.append(team)
                     log.debug(f"Added team {team} to user {self.uid}")
         log.info(
-            f"Created User: {self.uid} with teams: {self.teams} and permissions: {self.permissions} with desktops: {len(self.desktops)} and permissions: {self.permissions}"
+            f"Created User: {self.uid} with teams: {self.teams} and permissions: {self.permissions} with desktops: {len(self.desktops)} and vulnerabilities: {len(self.vulnerabilities)}"
         )
 
     def addDesktop(
@@ -1105,7 +1123,10 @@ class Operation(BaseModel):
     def addDevice(
         self,
         hostname: str,
-        ipaddr: str = "127.0.0.1",
+        ipaddr: str
+        | ipaddress.IPv4Address
+        | ipaddress.IPv6Address
+        | None = "127.0.0.1",
         macaddr: str = "",
         operatingsystem: str = "",
         fqdn: str = "",
@@ -1116,6 +1137,7 @@ class Operation(BaseModel):
         # Allow passing pre-built lists if needed
         services: list[Any] | None = None,
         peripherals: list[Any] | None = None,
+        vulnerabilities: list[Any] | None = None,
     ) -> bool:
         """Add or merge a device in the operation."""
         # legacy aliases override
@@ -1134,6 +1156,7 @@ class Operation(BaseModel):
             fqdn=fqdn,
             services=services,
             peripherals=peripherals,
+            vulnerabilities=vulnerabilities,
         )
 
         # Check for existing by Unique ID (hostname)
@@ -1160,6 +1183,7 @@ class Operation(BaseModel):
         desktops: list[Device] | None = None,
         ldap_groups: list[str] | None = None,
         cloud_accounts: list[str] | None = None,
+        vulnerabilities: list[Any] | None = None,
     ) -> bool:
         """Add or merge a user in the operation."""
         new_user = User(
@@ -1173,6 +1197,7 @@ class Operation(BaseModel):
             desktops=desktops,
             ldap_groups=ldap_groups,
             cloud_accounts=cloud_accounts,
+            vulnerabilities=vulnerabilities,
         )
 
         # Check for existing by Unique ID (uid)

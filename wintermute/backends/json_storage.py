@@ -115,3 +115,15 @@ class JsonFileBackend:
             for f in os.listdir(self.base_path)
             if f.endswith(".json")
         ]
+
+    def delete(self, operation_id: str) -> bool:
+        path = self._get_path(operation_id)
+        if not os.path.exists(path):
+            log.warning(f"Operation {operation_id} not found at {path}")
+            return False
+        try:
+            os.remove(path)
+            return True
+        except Exception as e:
+            log.error(f"Error deleting {path}: {e}")
+            return False
