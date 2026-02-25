@@ -26,7 +26,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Protocol, runtime_checkable
 
@@ -48,11 +50,51 @@ class Tool:
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, base_path: str = "/opt") -> None:
         self._tools: Dict[str, Tool] = {}
+        self._path_mapping: Dict[str, Dict[str, str]] = {}
+        # Environment override
+        self.base_path = os.getenv("WINTERMUTE_TOOLS_ROOT", base_path)
+
+    def load_tool_configs(self, json_path: str) -> None:
+        """Read distributable_db/tools.json and store in _path_mapping."""
+        if not os.path.exists(json_path):
+            log.warning(f"Tool config file not found: {json_path}")
+            return
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    for entry in data:
+                        if "name" in entry:
+                            self._path_mapping[entry["name"]] = entry
+                elif isinstance(data, dict):
+                    # In case it's a dict-based mapping
+                    self._path_mapping = data
+        except Exception as e:
+            log.warning(f"Failed to load tool configs from {json_path}: {e}")
 
     def register(self, tool: Tool) -> None:
-        self._tools[tool.name] = tool
+        # Smart Registration: update description with absolute path if mapped
+        description = tool.description
+        if tool.name in self._path_mapping:
+            entry = self._path_mapping[tool.name]
+            if "directory" in entry and "executable" in entry:
+                abs_path = os.path.join(
+                    self.base_path, entry["directory"], entry["executable"]
+                )
+                description = f"{description}\n\nAbsolute Path: {abs_path}".strip()
+
+        # Update the tool with the new description if changed
+        updated_tool = Tool(
+            name=tool.name,
+            input_schema=tool.input_schema,
+            output_schema=tool.output_schema,
+            handler=tool.handler,
+            description=description,
+        )
+        self._tools[updated_tool.name] = updated_tool
 
     def call(self, name: str, args: JSONObject) -> JSONObject:
         if name not in self._tools:

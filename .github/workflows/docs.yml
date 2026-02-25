@@ -1,0 +1,33 @@
+name: Publish Operator Manual
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "wintermute/**" # Triggers rebuild if your docstrings change
+      - "pyproject.toml"
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        run: pip install hatch
+
+      - name: Build and Deploy Docs
+        # This uses your default hatch env which includes the 'docs' feature
+        run: hatch run mkdocs gh-deploy --force

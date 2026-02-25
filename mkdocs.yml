@@ -12,35 +12,34 @@ markdown_extensions:
       toc_depth: 3
 repo_name: nahualito/wintermute
 repo_url: https://github.com/nahualito/wintermute
-site_name: wintermute docs
-site_url: "http://localhost:8000"
+site_name: Wintermute Operator Manual
+site_url: "https://nahualito.github.io/wintermute/"
 theme:
+  name: material
   favicon: assets/images/favicon.png
+  logo: assets/images/wintermute_log.svg
   features:
     - content.code.copy
     - header.autohide
     - navigation.instant
     - navigation.top
-  font: false
-  icon:
-    logo: octicons/book-24
-    repo: octicons/mark-github-16
-  name: readthedocs
-  highlightjs: true
-  hljs_languages:
-    - python
-    - yaml
+    - navigation.tabs
+    - navigation.sections
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
   palette:
     - media: "(prefers-color-scheme: dark)"
       accent: cyan
-      primary: cyan
+      primary: black
       scheme: slate
       toggle:
         icon: material/weather-night
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       accent: cyan
-      primary: cyan
+      primary: black
       scheme: default
       toggle:
         icon: material/weather-sunny
@@ -52,6 +51,8 @@ plugins:
       handlers:
         python:
           paths: ["."]
+  - mkdocs-jupyter:
+      include_source: true
   - gen-files:
       scripts:
         - gen_ref_pages.py

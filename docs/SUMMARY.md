@@ -1,2 +1,7 @@
 - [Home](index.md)
+- [Operator Manual](manual/index.md)
 - [API Reference](reference/SUMMARY.md)
+- [Tutorials](tutorials/index.md)
+    - [01 AI Routing & Tools](tutorials/01_neural_routing.ipynb)
+    - [02 Operator Ticketing](tutorials/02_bugzilla_tracking.ipynb)
+    - [03 Automated Reporting](tutorials/03_docx_generation.ipynb)

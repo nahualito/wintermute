@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+import json
+import os
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -44,6 +47,49 @@ def test_tool_registry_get_definitions() -> None:
     assert len(defs) == 1
     assert defs[0]["function"]["name"] == "test_tool"
     assert defs[0]["function"]["parameters"] == {"type": "object"}
+
+
+def test_tool_registry_path_aware(tmp_path: Any) -> None:
+    # 1. Test base_path and environment override
+    registry = ToolRegistry(base_path="/custom")
+    assert registry.base_path == "/custom"
+
+    os.environ["WINTERMUTE_TOOLS_ROOT"] = "/env_root"
+    registry_env = ToolRegistry()
+    assert registry_env.base_path == "/env_root"
+    del os.environ["WINTERMUTE_TOOLS_ROOT"]
+
+    # 2. Test load_tool_configs and smart registration
+    tools_json = tmp_path / "tools.json"
+    config = [
+        {
+            "name": "mapped_tool",
+            "directory": "bin",
+            "executable": "tool.sh",
+        }
+    ]
+    tools_json.write_text(json.dumps(config))
+
+    registry.load_tool_configs(str(tools_json))
+
+    tool = Tool(
+        name="mapped_tool",
+        input_schema={},
+        output_schema={},
+        handler=lambda x: x,
+        description="original desc",
+    )
+    registry.register(tool)
+
+    registered_tool = registry._tools["mapped_tool"]
+    assert "Absolute Path: /custom/bin/tool.sh" in registered_tool.description
+    assert "original desc" in registered_tool.description
+
+
+def test_tool_registry_load_missing_config(caplog: Any) -> None:
+    registry = ToolRegistry()
+    registry.load_tool_configs("nonexistent.json")
+    assert "Tool config file not found" in caplog.text
 
 
 @pytest.mark.asyncio
