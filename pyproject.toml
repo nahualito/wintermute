@@ -3,6 +3,7 @@ build-backend = "hatchling.build"
 requires = ["hatchling>=1.26.3,<2"]
 
 [project]
+name = "wintermute"
 authors = [{ email = "enrique.sanchez@caissa-security.com", name = "Enrique Sanchez" }]
 classifiers = [
   "Natural Language :: English",
@@ -47,7 +48,6 @@ dependencies = [
 description = "Hardware security hacking and auditing framework for attack and pentesting automation."
 dynamic = ["version"]
 license = "MIT"
-name = "wintermute"
 readme = "README.md"
 requires-python = ">=3.11,<4"
 
