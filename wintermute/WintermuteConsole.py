@@ -10,7 +10,7 @@ import importlib
 import inspect
 import logging
 import os
-import re
+import shlex
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
@@ -55,7 +55,7 @@ def get_visible_state(obj: Any) -> dict[str, Any]:
 
     Filters out:
     - Any key found in obj.__schema__
-    - Any key starting with _
+    - Any key starting with _ (except pins which should be visible)
 
     Args:
         obj: The object to inspect.
@@ -67,11 +67,17 @@ def get_visible_state(obj: Any) -> dict[str, Any]:
     schema_keys = set(schema.keys())
 
     result: dict[str, Any] = {}
+    # Use vars(obj) as requested to ensure all properties remain editable
     for key, value in vars(obj).items():
         # Skip schema keys and private attributes (except pins which should be visible)
         if key in schema_keys or (key.startswith("_") and key != "pins"):
             continue
         result[key] = value
+
+    # If pins attribute exists, ensure it's returned for visibility
+    if hasattr(obj, "pins") and isinstance(obj.pins, dict):
+        # We keep it as a dict, the formatter in cmd_status/cmd_vars handles display
+        result["pins"] = obj.pins
 
     return result
 
@@ -839,18 +845,19 @@ class WintermuteConsole:
         target_obj = self._resolve_path(path)
 
         if target_obj is None:
-            self.rich_console.print(
-                f"[red][!] Could not find object at path: {path}[/]"
-            )
+            # _resolve_path already prints the error details
             return
 
         # Get object type and identifier for display
-        obj_type = target_obj.__class__.__name__.lower()
+        obj_type = target_obj.__class__.__name__
         obj_id = (
             getattr(target_obj, "hostname", None)
             or getattr(target_obj, "uid", None)
             or getattr(target_obj, "name", None)
+            or getattr(target_obj, "app", None)
             or getattr(target_obj, "title", None)
+            or getattr(target_obj, "username", None)
+            or getattr(target_obj, "role_name", None)
             or str(target_obj)
         )
 
@@ -875,7 +882,7 @@ class WintermuteConsole:
             )
 
     def _remove_object_from_parent(self, path: str, target_obj: Any) -> bool:
-        """Remove an object from its parent container.
+        """Remove an object from its parent container using path resolution.
 
         Args:
             path: Path to the object
@@ -884,95 +891,107 @@ class WintermuteConsole:
         Returns:
             True if removal was successful, False otherwise
         """
-        # Split path to get parent path
-        parts = path.replace("/", ".").split(".")
-        if len(parts) <= 1:
-            # Root level object - remove from operation
-            obj_type = target_obj.__class__.__name__.lower()
-
-            if obj_type == "device":
-                self.operation.devices = [
-                    d
-                    for d in self.operation.devices
-                    if d.hostname != target_obj.hostname
-                ]
-                return True
-            elif obj_type == "user":
-                self.operation.users = [
-                    u for u in self.operation.users if u.uid != target_obj.uid
-                ]
-                return True
-            elif obj_type == "awsaccount":
-                self.operation.cloud_accounts = [
-                    a
-                    for a in self.operation.cloud_accounts
-                    if getattr(a, "name", "") != getattr(target_obj, "name", "")
-                    and getattr(a, "account_id", "")
-                    != getattr(target_obj, "account_id", "")
-                ]
-                return True
-            elif obj_type == "vulnerability":
-                # Vulnerability at root level - remove from operation's devices
-                for device in self.operation.devices:
-                    device.vulnerabilities = [
-                        v for v in device.vulnerabilities if v.title != target_obj.title
-                    ]
-                return True
-
+        # We reuse the same parsing logic as _resolve_path
+        try:
+            normalized = ""
+            in_quote = False
+            quote_char = ""
+            for char in path:
+                if char in ('"', "'"):
+                    if not in_quote:
+                        in_quote = True
+                        quote_char = char
+                    elif char == quote_char:
+                        in_quote = False
+                if not in_quote and char in (".", "/"):
+                    normalized += " "
+                else:
+                    normalized += char
+            parts = shlex.split(normalized)
+        except Exception:
             return False
 
-        # Nested object - get parent path
-        parent_path = ".".join(parts[:-1])
+        if not parts:
+            return False
+
+        # Handle explicit typing (e.g., "device.hostname.peripheral.name")
+        if parts[0] in (
+            "device",
+            "cloud_account",
+            "user",
+            "awsaccount",
+            "peripheral",
+            "service",
+        ):
+            parts = parts[1:]
+
+        if not parts:
+            return False
+
+        if len(parts) == 1:
+            # Root level object - remove from operation
+            if target_obj in self.operation.devices:
+                self.operation.devices.remove(target_obj)
+                return True
+            if target_obj in self.operation.users:
+                self.operation.users.remove(target_obj)
+                return True
+            if target_obj in self.operation.cloud_accounts:
+                self.operation.cloud_accounts.remove(target_obj)
+                return True
+            return False
+
+        # Nested object - find parent path
+        # We reconstruct the parent path by joining all parts except the last one
+        # This is safe because we're using the same shlex-split parts
+        parent_parts = parts[:-1]
+
+        # Filter out noise/container words from the end of parent_parts if they were explicitly provided
+        # e.g. "host.peripherals.uart" -> parent is "host", but path could be "host.peripherals"
+        while parent_parts and parent_parts[-1] in (
+            "peripherals",
+            "services",
+            "vulnerabilities",
+            "iamusers",
+            "iamroles",
+            "processor",
+            "memory",
+            "architecture",
+        ):
+            parent_parts.pop()
+
+        if not parent_parts:
+            # If after stripping container words we have nothing, it was likely root-level anyway
+            return self._remove_object_from_parent(parts[-1], target_obj)
+
+        parent_path = ".".join([f'"{p}"' if " " in p else p for p in parent_parts])
         parent_obj = self._resolve_path(parent_path)
 
         if parent_obj is None:
+            self.rich_console.print(
+                "[red][!] Could not identify parent container for removal.[/]"
+            )
             return False
 
-        # Get the field name (last part of path)
-        _field_name = parts[-1]
+        # Try to remove from common list attributes
+        for attr_name in [
+            "peripherals",
+            "services",
+            "vulnerabilities",
+            "iamusers",
+            "iamroles",
+        ]:
+            if hasattr(parent_obj, attr_name):
+                lst = getattr(parent_obj, attr_name)
+                if isinstance(lst, list) and target_obj in lst:
+                    lst.remove(target_obj)
+                    return True
 
-        # Try to find and remove the object from parent's lists
-        obj_type = target_obj.__class__.__name__.lower()
-
-        if obj_type == "peripheral":
-            if hasattr(parent_obj, "peripherals") and isinstance(
-                parent_obj.peripherals, list
-            ):
-                parent_obj.peripherals = [
-                    p
-                    for p in parent_obj.peripherals
-                    if getattr(p, "name", "") != getattr(target_obj, "name", "")
-                ]
+        # Handle direct assignments (processor, memory, etc.)
+        for attr_name in ["processor", "memory", "architecture"]:
+            if getattr(parent_obj, attr_name, None) is target_obj:
+                setattr(parent_obj, attr_name, None)
                 return True
-        elif obj_type == "service":
-            if hasattr(parent_obj, "services") and isinstance(
-                parent_obj.services, list
-            ):
-                parent_obj.services = [
-                    s
-                    for s in parent_obj.services
-                    if getattr(s, "app", "") != getattr(target_obj, "app", "")
-                ]
-                return True
-        elif obj_type == "vulnerability":
-            # Check device vulnerabilities
-            if hasattr(parent_obj, "vulnerabilities") and isinstance(
-                parent_obj.vulnerabilities, list
-            ):
-                parent_obj.vulnerabilities = [
-                    v for v in parent_obj.vulnerabilities if v.title != target_obj.title
-                ]
-                return True
-            # Check peripheral vulnerabilities
-            if hasattr(parent_obj, "peripherals"):
-                for p in parent_obj.peripherals:
-                    if hasattr(p, "vulnerabilities") and isinstance(
-                        p.vulnerabilities, list
-                    ):
-                        p.vulnerabilities = [
-                            v for v in p.vulnerabilities if v.title != target_obj.title
-                        ]
-                        return True
 
         return False
 
@@ -1049,20 +1068,45 @@ class WintermuteConsole:
         data = active_builder.properties
         cls = active_builder.entity_class
 
+        # Check if this is an edit mode (original object exists)
+        original_obj = active_builder._original_object
+
         try:
             # 1. Instantiate Object if class is mapped
             entity_obj = None
             if cls:
-                # Filter unknown kwargs to avoid __init__ errors if strict
-                # For now assume user set valid keys via autocomplete
-                entity_obj = cls(**data)
+                # Filter unknown kwargs to avoid __init__ errors
+                sig = inspect.signature(cls.__init__)
+                valid_kwargs = {
+                    k: v
+                    for k, v in data.items()
+                    if k in sig.parameters
+                    and sig.parameters[k].kind
+                    in (
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+                }
+                entity_obj = cls(**valid_kwargs)
+                # Manually set attributes that were not in __init__ but in data
+                for k, v in data.items():
+                    if k not in valid_kwargs and not k.startswith("_"):
+                        setattr(entity_obj, k, v)
             else:
-                # If no class mapped (e.g. device/user/service handled via dict/Operation)
-                # we keep it as data dict
                 entity_obj = data
 
-            # 2. Check if Root or Nested
-            # If stack length is 1, we are at root level (about to be popped)
+            # 2. In-Place Editing Logic
+            if original_obj:
+                if entity_obj:
+                    # Use the library's merge logic to update the original instance
+                    self.operation._merge_attributes(original_obj, entity_obj)
+                    self.rich_console.print(
+                        f"[bold green]✔[/] Updated existing {target} in-place."
+                    )
+                self.cmd_back()
+                return
+
+            # 3. Check if Root or Nested (for NEW objects)
             if len(self.builder_stack) == 1:
                 # --- ROOT LEVEL SAVE ---
                 if not entity_obj:
@@ -1073,114 +1117,52 @@ class WintermuteConsole:
 
                 success = False
                 if target == "device" and isinstance(entity_obj, Device):
-                    # Ensure all nested items from data (builder properties) are in entity_obj
-                    # This ensures peripherals/vulnerabilities are attached before saving to operation
-                    entity_obj.peripherals = data.get(
-                        "peripherals", entity_obj.peripherals
-                    )
-                    entity_obj.vulnerabilities = data.get(
-                        "vulnerabilities", entity_obj.vulnerabilities
-                    )
-                    entity_obj.services = data.get("services", entity_obj.services)
-
                     if self.operation.addDevice(
                         hostname=entity_obj.hostname,
                         ipaddr=entity_obj.ipaddr,
                         macaddr=entity_obj.macaddr,
                         operatingsystem=entity_obj.operatingsystem,
                         fqdn=entity_obj.fqdn,
-                        services=entity_obj.services,
-                        peripherals=entity_obj.peripherals,
-                        vulnerabilities=entity_obj.vulnerabilities,
+                        services=getattr(entity_obj, "services", []),
+                        peripherals=getattr(entity_obj, "peripherals", []),
+                        vulnerabilities=getattr(entity_obj, "vulnerabilities", []),
                     ):
                         self.rich_console.print(
                             f"[bold green]✔[/] Saved Device: {entity_obj.hostname}"
                         )
                         success = True
-                    else:
-                        self.rich_console.print("[red][!] Failed to save device.")
-
                 elif target == "user" and isinstance(entity_obj, User):
-                    # Ensure vulnerabilities are attached
-                    entity_obj.vulnerabilities = data.get(
-                        "vulnerabilities", entity_obj.vulnerabilities
-                    )
-
                     if self.operation.addUser(
                         uid=entity_obj.uid,
                         name=entity_obj.name,
                         email=entity_obj.email,
                         teams=entity_obj.teams,
-                        dept=entity_obj.dept,
-                        permissions=entity_obj.permissions,
-                        override_reason=entity_obj.override_reason,
-                        desktops=entity_obj.desktops,
-                        ldap_groups=entity_obj.ldap_groups,
-                        cloud_accounts=entity_obj.cloud_accounts,
-                        vulnerabilities=entity_obj.vulnerabilities,
+                        vulnerabilities=getattr(entity_obj, "vulnerabilities", []),
                     ):
                         self.rich_console.print(
                             f"[bold green]✔[/] Saved User: {entity_obj.uid}"
                         )
                         success = True
-                    else:
-                        self.rich_console.print("[red][!] Failed to save user.")
-
                 elif target == "awsaccount" and isinstance(entity_obj, AWSAccount):
-                    # Check match by ID or Name
-                    e_acc_id = getattr(entity_obj, "account_id", None)
-                    e_name = getattr(entity_obj, "name", "")
-                    existing_acc = next(
-                        (
-                            a
-                            for a in self.operation.awsaccounts
-                            if (getattr(a, "account_id", None) == e_acc_id and e_acc_id)
-                            or getattr(a, "name", "") == e_name
-                        ),
-                        None,
-                    )
-                    if existing_acc:
-                        self.operation._merge_attributes(existing_acc, entity_obj)
+                    if self.operation.addCloudAccount(
+                        name=entity_obj.name,
+                        cloud_type="AWS",
+                        account_id=entity_obj.account_id,
+                        vulnerabilities=getattr(entity_obj, "vulnerabilities", []),
+                    ):
                         self.rich_console.print(
-                            f"[bold green]✔[/] Updated AWS Account: {e_name}"
+                            f"[bold green]✔[/] Saved AWS Account: {entity_obj.name}"
                         )
-                    else:
-                        self.operation.cloud_accounts.append(entity_obj)
-                        self.rich_console.print(
-                            f"[bold green]✔[/] Created AWS Account: {e_name}"
-                        )
-                    success = True
-
+                        success = True
                 elif target == "service" and isinstance(entity_obj, Service):
-                    # For Service at root, we still need context of WHERE to put it.
-                    # The builder context might have 'device_hostname' if set manually.
                     dev_host = data.get("device_hostname")
                     if dev_host:
                         dev = self.operation.getDeviceByHostname(str(dev_host))
                         if dev:
-                            # Merge logic for Service is: add if not exists
-                            # Check if service exists
-                            existing_svc = next(
-                                (
-                                    s
-                                    for s in dev.services
-                                    if s.portNumber == entity_obj.portNumber
-                                    and s.protocol == entity_obj.protocol
-                                ),
-                                None,
+                            dev.services.append(entity_obj)
+                            self.rich_console.print(
+                                f"[bold green]✔[/] Added Service to {dev_host}"
                             )
-                            if existing_svc:
-                                self.operation._merge_attributes(
-                                    existing_svc, entity_obj
-                                )
-                                self.rich_console.print(
-                                    f"[bold green]✔[/] Updated Service on {dev_host}"
-                                )
-                            else:
-                                dev.services.append(entity_obj)
-                                self.rich_console.print(
-                                    f"[bold green]✔[/] Added Service to {dev_host}"
-                                )
                             success = True
                         else:
                             self.rich_console.print(
@@ -1190,70 +1172,47 @@ class WintermuteConsole:
                         self.rich_console.print(
                             "[red][!] Root service requires 'device_hostname' property to attach.[/]"
                         )
-
                 else:
+                    # Generic fallback for other types
                     self.rich_console.print(
                         f"[red][!] Cannot save {target} at root level (unsupported type).[/]"
                     )
                     return
 
                 if success:
-                    self.cmd_back()  # Pops the builder from stack
+                    self.cmd_back()
 
             else:
-                # --- NESTED LEVEL SAVE ---
-                # We are nested. The parent is at index -2.
+                # --- NESTED LEVEL SAVE (NEW objects) ---
                 parent_builder = self.builder_stack[-2]
-                parent_cls = parent_builder.entity_class
-
-                # Determine target field name
-                # 1. Use explicit parent_list_name if set (e.g. 'peripherals')
-                # 2. Fallback to entity name (e.g. 'processor')
                 field_name = active_builder.parent_list_name or target
 
-                # Determine if field is a list or scalar using introspection
+                # Determine if field is a list or scalar
                 is_list_field = False
-
-                # A) Explicit override check
                 if active_builder.parent_list_name:
                     is_list_field = True
-
-                # B) Schema inspection
-                elif parent_cls:
+                elif parent_builder.entity_class:
                     try:
-                        sig = inspect.signature(parent_cls.__init__)
+                        sig = inspect.signature(parent_builder.entity_class.__init__)
                         if field_name in sig.parameters:
                             param = sig.parameters[field_name]
-                            if param.annotation != inspect.Parameter.empty:
-                                type_str = str(param.annotation)
-                                # crude check for list/sequence/iterable types
-                                if any(
-                                    x in type_str.lower()
-                                    for x in ["list", "sequence", "iterable"]
-                                ):
-                                    is_list_field = True
+                            type_str = str(param.annotation)
+                            if any(
+                                x in type_str.lower()
+                                for x in ["list", "sequence", "iterable"]
+                            ):
+                                is_list_field = True
                     except Exception:
                         pass
 
-                # Apply changes
                 if is_list_field:
                     if field_name not in parent_builder.properties:
                         parent_builder.properties[field_name] = []
-
-                    # Safety check: ensure it IS a list
-                    if not isinstance(parent_builder.properties[field_name], list):
-                        # Convert scalar to list if needed (shouldn't happen with proper usage)
-                        existing = parent_builder.properties[field_name]
-                        parent_builder.properties[field_name] = (
-                            [existing] if existing else []
-                        )
-
                     parent_builder.properties[field_name].append(entity_obj)
                     self.rich_console.print(
-                        f"[bold green]✔[/] Attached {target} to parent list '{field_name}'."
+                        f"[bold green]✔[/] Attached new {target} to parent list '{field_name}'."
                     )
                 else:
-                    # Single assignment (handles processor, architecture, etc.)
                     parent_builder.properties[field_name] = entity_obj
                     self.rich_console.print(
                         f"[bold green]✔[/] Set parent field '{field_name}' = {target}"
@@ -1263,21 +1222,15 @@ class WintermuteConsole:
 
         except Exception as e:
             self.rich_console.print(f"[red][!] Builder error: {e}[/]")
+            logger.exception("Builder save error")
 
     def _resolve_path(self, path: str) -> Any:
         """Resolve a path string to an object in the operation tree.
 
-        Path format: gateway_node.peripherals."debug console" or gateway_node/peripherals/uart0
-        - First component: search self.operation.devices by hostname
-        - If device found, search device.peripherals or device.services by name/app
-        - If device found, search device.vulnerabilities by title
-        - If peripheral found, search peripheral.vulnerabilities by title
-        - If service found, search service.vulnerabilities by title
-        - Search self.operation.cloud_accounts by name/account_id
-        - Search self.operation.users by uid
+        Supports complex identifiers with quotes and spaces, and deep-tree traversal.
 
         Args:
-            path: Dot-separated path string (e.g., "gateway_node.peripherals.uart0")
+            path: Path string (e.g., gateway.peripherals."debug console")
 
         Returns:
             The resolved object, or None if not found.
@@ -1285,29 +1238,62 @@ class WintermuteConsole:
         if not path:
             return None
 
-        # Parse path respecting quoted identifiers using regex
-        # Matches: word, "quoted string", 'quoted string'
-        parts = re.findall(r'[^."]+|"[^"]*"|\'[^\']*\'', path.replace("/", "."))
-        # Strip quotes from parts
-        parts = [p.strip("\"'") for p in parts]
+        # Replace slashes with dots but preserve quotes.
+        # Use shlex.split for robust parsing of quoted identifiers.
+        try:
+            normalized = ""
+            in_quote = False
+            quote_char = ""
+            for char in path:
+                if char in ('"', "'"):
+                    if not in_quote:
+                        in_quote = True
+                        quote_char = char
+                    elif char == quote_char:
+                        in_quote = False
+                if not in_quote and char in (".", "/"):
+                    normalized += " "
+                else:
+                    normalized += char
+            parts = shlex.split(normalized)
+        except Exception as e:
+            logger.debug(f"Path parsing failed: {e}")
+            return None
 
         if not parts:
             return None
 
-        current: Any = None
-        remaining_parts = parts.copy()
+        # Handle explicit typing prefixes (e.g., "device.hostname")
+        type_prefixes = (
+            "device",
+            "cloud_account",
+            "user",
+            "awsaccount",
+            "peripheral",
+            "service",
+        )
+        if parts[0].lower() in type_prefixes:
+            parts = parts[1:]
 
-        # First, try to find the root object (device, user, cloud account)
+        if not parts:
+            return None
+
+        # 1. Root Level Search
+        current: Any = None
         root_name = parts[0]
 
-        # 1. Search devices by hostname
-        for device in self.operation.devices:
-            if device.hostname == root_name:
-                current = device
-                remaining_parts.pop(0)
+        # Search devices (hostname)
+        for d in self.operation.devices:
+            if d.hostname == root_name:
+                current = d
                 break
-
-        # 2. Search cloud accounts by name or account_id
+        # Search users (uid)
+        if current is None:
+            for u in self.operation.users:
+                if u.uid == root_name:
+                    current = u
+                    break
+        # Search cloud accounts (name/id)
         if current is None:
             for acc in self.operation.cloud_accounts:
                 if (
@@ -1315,92 +1301,88 @@ class WintermuteConsole:
                     or getattr(acc, "account_id", "") == root_name
                 ):
                     current = acc
-                    remaining_parts.pop(0)
                     break
 
-        # 3. Search users by uid
         if current is None:
-            for user in self.operation.users:
-                if user.uid == root_name:
-                    current = user
-                    remaining_parts.pop(0)
-                    break
-
-        # If we couldn't find the root, return None
-        if current is None:
+            self.rich_console.print(f"[red][!] Root object '{root_name}' not found.[/]")
             return None
 
-        # Now traverse the remaining path components
-        for part in remaining_parts:
-            if current is None:
-                return None
+        # 2. Traversal
+        container_keywords = (
+            "peripherals",
+            "services",
+            "vulnerabilities",
+            "iamusers",
+            "iamroles",
+            "processor",
+            "memory",
+            "architecture",
+            "desktops",
+            "users",
+            "analysts",
+            "test_plans",
+            "test_runs",
+        )
 
-            # Check if current has a 'peripherals' list
-            if hasattr(current, "peripherals") and isinstance(
-                getattr(current, "peripherals", None), list
-            ):
-                for p in current.peripherals:
-                    if getattr(p, "name", "") == part:
-                        current = p
-                        break
-                else:
-                    # Check services list
-                    if hasattr(current, "services") and isinstance(
-                        getattr(current, "services", None), list
-                    ):
-                        for s in current.services:
+        for i in range(1, len(parts)):
+            part = parts[i]
+            if not current:
+                break
+
+            # If the part is just a container keyword, skip it to look inside it
+            if part.lower() in container_keywords:
+                # If it's the last part, return the list itself
+                if i == len(parts) - 1:
+                    return getattr(current, part, None)
+                continue
+
+            parent = current
+            found_obj = None
+
+            # --- Check lists ---
+            lists_to_search = [
+                "peripherals",
+                "services",
+                "vulnerabilities",
+                "iamusers",
+                "iamroles",
+                "users",
+                "desktops",
+            ]
+
+            for attr in lists_to_search:
+                if hasattr(parent, attr):
+                    lst = getattr(parent, attr)
+                    if isinstance(lst, list):
+                        for item in lst:
+                            # Match by various identifier attributes
                             if (
-                                getattr(s, "app", "") == part
-                                or getattr(s, "name", "") == part
+                                getattr(item, "name", None) == part
+                                or getattr(item, "app", None) == part
+                                or str(getattr(item, "portNumber", "")) == part
+                                or getattr(item, "title", None) == part
+                                or getattr(item, "username", None) == part
+                                or getattr(item, "role_name", None) == part
+                                or getattr(item, "uid", None) == part
+                                or getattr(item, "hostname", None) == part
                             ):
-                                current = s
+                                found_obj = item
                                 break
-                        else:
-                            return None
-                    else:
-                        return None
-            # Check if current has a 'services' list (for devices)
-            elif hasattr(current, "services") and isinstance(
-                getattr(current, "services", None), list
-            ):
-                for s in current.services:
-                    if getattr(s, "app", "") == part or getattr(s, "name", "") == part:
-                        current = s
-                        break
-                else:
-                    return None
-            # Check if current has a 'vulnerabilities' list
-            elif hasattr(current, "vulnerabilities") and isinstance(
-                getattr(current, "vulnerabilities", None), list
-            ):
-                for v in current.vulnerabilities:
-                    if getattr(v, "title", "") == part:
-                        current = v
-                        break
-                else:
-                    return None
-            # Check if current has a 'processor' attribute
-            elif hasattr(current, "processor"):
-                if getattr(current.processor, "name", "") == part:
-                    current = current.processor
-                else:
-                    return None
-            # Check if current has 'iamusers' or 'iamroles' (AWS accounts)
-            elif hasattr(current, "iamusers"):
-                for u in current.iamusers:
-                    if getattr(u, "username", "") == part:
-                        current = u
-                        break
-                else:
-                    return None
-            elif hasattr(current, "iamroles"):
-                for r in current.iamroles:
-                    if getattr(r, "role_name", "") == part:
-                        current = r
-                        break
-                else:
-                    return None
+                if found_obj:
+                    break
+
+            if found_obj is not None:
+                current = found_obj
             else:
+                parent_id = (
+                    getattr(parent, "hostname", None)
+                    or getattr(parent, "uid", None)
+                    or getattr(parent, "name", None)
+                    or str(parent)
+                )
+                self.rich_console.print(
+                    f"[red][!] '{part}' not found under {parent.__class__.__name__} '{parent_id}'.[/]"
+                )
                 return None
 
         return current
