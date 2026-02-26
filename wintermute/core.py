@@ -667,6 +667,7 @@ class Operation(BaseModel):
         "test_runs": TestCaseRun,
     }
 
+    _active: ClassVar[Optional["Operation"]] = None
     _backend: ClassVar[Optional[StorageBackend]] = None
     _backends: ClassVar[Dict[str, StorageBackend]] = {}
 
@@ -769,6 +770,9 @@ class Operation(BaseModel):
             self.test_runs.append(
                 TestCaseRun.from_dict(tr) if isinstance(tr, dict) else tr
             )
+
+        # Set this operation as the active one
+        Operation._active = self
 
         log.info(
             f"Created Operation: {self.operation_name} with ID: {self.operation_id}"

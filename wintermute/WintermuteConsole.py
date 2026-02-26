@@ -10,6 +10,8 @@ import importlib
 import inspect
 import logging
 import os
+import re
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
@@ -30,8 +32,6 @@ from wintermute.ai.tools_runtime import ToolsRuntime
 from wintermute.ai.tools_runtime import tools as global_tool_registry
 from wintermute.ai.use import tool_calling_chat
 from wintermute.ai.utils.tool_factory import register_tools
-from wintermute.backends.bugzilla import BugzillaBackend
-from wintermute.backends.docx_reports import DocxTplPerVulnBackend
 from wintermute.backends.json_storage import JsonFileBackend
 from wintermute.core import AWSAccount, Device, Operation, Service, User
 from wintermute.findings import Vulnerability
@@ -48,6 +48,33 @@ from wintermute.peripherals import (
 )
 from wintermute.reports import Report
 from wintermute.tickets import Ticket
+
+
+def get_visible_state(obj: Any) -> dict[str, Any]:
+    """Return a dict of all visible state from an object.
+
+    Filters out:
+    - Any key found in obj.__schema__
+    - Any key starting with _
+
+    Args:
+        obj: The object to inspect.
+
+    Returns:
+        A dict of visible state items.
+    """
+    schema = getattr(obj, "__schema__", {})
+    schema_keys = set(schema.keys())
+
+    result: dict[str, Any] = {}
+    for key, value in vars(obj).items():
+        # Skip schema keys and private attributes (except pins which should be visible)
+        if key in schema_keys or (key.startswith("_") and key != "pins"):
+            continue
+        result[key] = value
+
+    return result
+
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +97,8 @@ class BuilderContext:
         self.entity_class = entity_class
         self.parent_list_name = parent_list_name
         self.properties: Dict[str, Any] = {}
+        # Store original object reference for edit mode
+        self._original_object: Any | None = None
 
 
 class WintermuteConsole:
@@ -320,6 +349,7 @@ class WintermuteConsole:
             "exit": None,
             "back": None,
             "status": None,
+            "vars": None,
             "workspace": {
                 "switch": None,
             },
@@ -330,6 +360,8 @@ class WintermuteConsole:
                 "service": None,
                 "awsaccount": None,
             },
+            "edit": None,
+            "delete": None,
         }
 
         # Gather dynamic completion data
@@ -392,8 +424,8 @@ class WintermuteConsole:
                 },
             }
 
-            # Dynamic lists for edit command completion
-            edit_targets = {
+            # Dynamic lists for edit and delete command completion
+            edit_targets: Dict[str, Any] = {
                 "device": {d.hostname: None for d in self.operation.devices},
                 "user": {u.uid: None for u in self.operation.users},
                 "awsaccount": {
@@ -403,7 +435,64 @@ class WintermuteConsole:
                 },
             }
 
+            # Collect all nested objects for edit/delete
+            all_devices = {d.hostname: None for d in self.operation.devices}
+            all_users = {u.uid: None for u in self.operation.users}
+            all_aws = {
+                a.name: None for a in self.operation.awsaccounts if hasattr(a, "name")
+            }
+
+            # Collect peripherals
+            all_peripherals: Dict[str, Any] = {}
+            for d in self.operation.devices:
+                for p in d.peripherals or []:
+                    p_name = getattr(p, "name", None)
+                    if p_name:
+                        all_peripherals[f"{d.hostname}.peripherals.{p_name}"] = None
+
+            # Collect services
+            all_services: Dict[str, Any] = {}
+            for d in self.operation.devices:
+                for s in d.services or []:
+                    s_name = getattr(s, "app", None)
+                    if s_name:
+                        all_services[f"{d.hostname}.services.{s_name}"] = None
+
+            # Collect vulnerabilities
+            all_vulns: Dict[str, Any] = {}
+            for d in self.operation.devices:
+                for v in d.vulnerabilities or []:
+                    v_title = getattr(v, "title", None)
+                    if v_title:
+                        all_vulns[f"{d.hostname}.vulnerabilities.{v_title}"] = None
+
+            # Collect cloud account nested objects
+            all_cloud: Dict[str, Any] = {}
+            for acc in self.operation.cloud_accounts:
+                acc_name = getattr(acc, "name", None)
+                if acc_name:
+                    for u in acc.iamusers or []:
+                        u_name = getattr(u, "username", None)
+                        if u_name:
+                            all_cloud[f"{acc_name}.iamusers.{u_name}"] = None
+                    for r in acc.iamroles or []:
+                        r_name = getattr(r, "role_name", None)
+                        if r_name:
+                            all_cloud[f"{acc_name}.iamroles.{r_name}"] = None
+
+            # Combine all targets for delete command
+            all_delete_targets: Dict[str, Any] = {
+                **all_devices,
+                **all_users,
+                **all_aws,
+                **all_peripherals,
+                **all_services,
+                **all_vulns,
+                **all_cloud,
+            }
+
             base_commands["edit"] = edit_targets
+            base_commands["delete"] = all_delete_targets
 
             if self.current_cartridge_name:
                 base_commands["set"] = {opt: None for opt in self.cartridge_options}
@@ -495,6 +584,8 @@ class WintermuteConsole:
         self.operation.operation_name = name
         try:
             if self.operation.load():
+                # Explicitly update _active to match the loaded operation
+                Operation._active = self.operation
                 self.rich_console.print(f"[bold green]✔[/] Loaded operation: {name}")
             else:
                 self.rich_console.print(
@@ -521,9 +612,42 @@ class WintermuteConsole:
         except Exception as e:
             self.rich_console.print(f"[red][!] Delete error: {e}[/]")
 
+    def _format_value(self, value: Any) -> str:
+        """Format a value for display in the status table.
+
+        Args:
+            value: The value to format.
+
+        Returns:
+            A formatted string representation of the value.
+        """
+        if isinstance(value, Enum):
+            return value.name
+        if isinstance(value, list):
+            return f"[{len(value)} items]"
+        if isinstance(value, dict):
+            return f"{{{len(value)} keys}}"
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+        if value is None:
+            return "[dim]None[/dim]"
+        return str(value)
+
     def cmd_status(self) -> None:
-        """Render a cyberpunk status tree of the current operation."""
-        op = self.operation
+        """Render a dynamic status tree of the current operation state."""
+        # Check if there's an active operation
+        if Operation._active is None:
+            self.rich_console.print(
+                Panel(
+                    "[bold red]NO ACTIVE OPERATION[/bold red]\n"
+                    "Create an operation with 'operation create <name>'",
+                    title="Status",
+                    border_style="red",
+                )
+            )
+            return
+
+        op = Operation._active
 
         # Root Node
         root = Tree(
@@ -533,7 +657,16 @@ class WintermuteConsole:
         # Branch: Analysts
         analysts_branch = root.add(f"[bold magenta]Analysts[/] ({len(op.analysts)})")
         for a in op.analysts:
-            analysts_branch.add(f"[green]{a.name}[/] [dim]({a.userid})[/]")
+            a_node = analysts_branch.add(f"[green]{a.name}[/] [dim]({a.userid})[/]")
+            # Show analyst state table
+            a_state = get_visible_state(a)
+            if a_state:
+                a_table = Table(show_header=True, header_style="bold cyan")
+                a_table.add_column("SIGNAL", style="cyan")
+                a_table.add_column("VALUE", style="bright_green")
+                for key, val in a_state.items():
+                    a_table.add_row(key, self._format_value(val))
+                a_node.add(a_table)
 
         # Branch: Devices
         devices_branch = root.add(f"[bold magenta]Devices[/] ({len(op.devices)})")
@@ -546,13 +679,43 @@ class WintermuteConsole:
                 for p in d.peripherals:
                     p_name = getattr(p, "name", "Unknown")
                     p_type = p.__class__.__name__
-                    peri_branch.add(f"{p_name} ({p_type})")
+                    p_node = peri_branch.add(f"[cyan]{p_name}[/] [dim]({p_type})[/]")
+                    # Show peripheral state table
+                    p_state = get_visible_state(p)
+                    if p_state:
+                        p_table = Table(show_header=True, header_style="bold cyan")
+                        p_table.add_column("SIGNAL", style="cyan")
+                        p_table.add_column("VALUE", style="bright_green")
+                        for key, val in p_state.items():
+                            p_table.add_row(key, self._format_value(val))
+                        p_node.add(p_table)
+
+                    # Show Vulnerabilities on peripheral
+                    if hasattr(p, "vulnerabilities") and p.vulnerabilities:
+                        vuln_branch = p_node.add(
+                            f"[red]Vulnerabilities[/] ({len(p.vulnerabilities)})"
+                        )
+                        for v in p.vulnerabilities:
+                            vuln_branch.add(
+                                f"[yellow]{v.title}[/] [dim](CVSS: {v.cvss})[/]"
+                            )
 
             # Show Services
             if d.services:
                 svc_branch = d_node.add(f"[yellow]Services[/] ({len(d.services)})")
                 for s in d.services:
-                    svc_branch.add(f"{s.portNumber}/{s.protocol} ({s.app})")
+                    svc_node = svc_branch.add(
+                        f"[green]{s.portNumber}/{s.protocol}[/] [dim]({s.app})[/]"
+                    )
+                    # Show service state table
+                    s_state = get_visible_state(s)
+                    if s_state:
+                        s_table = Table(show_header=True, header_style="bold cyan")
+                        s_table.add_column("SIGNAL", style="cyan")
+                        s_table.add_column("VALUE", style="bright_green")
+                        for key, val in s_state.items():
+                            s_table.add_row(key, self._format_value(val))
+                        svc_node.add(s_table)
 
             # Show Vulnerabilities
             if d.vulnerabilities:
@@ -560,12 +723,21 @@ class WintermuteConsole:
                     f"[red]Vulnerabilities[/] ({len(d.vulnerabilities)})"
                 )
                 for v in d.vulnerabilities:
-                    vuln_branch.add(f"{v.title} (CVSS: {v.cvss})")
+                    vuln_branch.add(f"[yellow]{v.title}[/] [dim](CVSS: {v.cvss})[/]")
 
         # Branch: Users
         users_branch = root.add(f"[bold magenta]Users[/] ({len(op.users)})")
         for u in op.users:
-            users_branch.add(f"[green]{u.uid}[/]")
+            u_node = users_branch.add(f"[green]{u.uid}[/]")
+            # Show user state table
+            u_state = get_visible_state(u)
+            if u_state:
+                u_table = Table(show_header=True, header_style="bold cyan")
+                u_table.add_column("SIGNAL", style="cyan")
+                u_table.add_column("VALUE", style="bright_green")
+                for key, val in u_state.items():
+                    u_table.add_row(key, self._format_value(val))
+                u_node.add(u_table)
 
         # Branch: Cloud Accounts
         cloud_branch = root.add(
@@ -574,7 +746,24 @@ class WintermuteConsole:
         for acc in op.cloud_accounts:
             name = getattr(acc, "name", "Unknown")
             aid = getattr(acc, "account_id", "No ID")
-            cloud_branch.add(f"[green]{name}[/] [dim]({aid})[/]")
+            acc_node = cloud_branch.add(f"[green]{name}[/] [dim]({aid})[/]")
+            # Show cloud account state table
+            acc_state = get_visible_state(acc)
+            if acc_state:
+                acc_table = Table(show_header=True, header_style="bold cyan")
+                acc_table.add_column("SIGNAL", style="cyan")
+                acc_table.add_column("VALUE", style="bright_green")
+                for key, val in acc_state.items():
+                    acc_table.add_row(key, self._format_value(val))
+                acc_node.add(acc_table)
+
+        # Branch: Test Plans
+        if op.test_plans:
+            test_plans_branch = root.add(
+                f"[bold magenta]Test Plans[/] ({len(op.test_plans)})"
+            )
+            for tp in op.test_plans:
+                test_plans_branch.add(f"[cyan]{tp.code}[/] [dim]({tp.name})[/]")
 
         self.rich_console.print(root)
 
@@ -608,51 +797,184 @@ class WintermuteConsole:
         if self.operation.addAWSAccount(name, account_id=account_id):
             self.rich_console.print(f"[+] Added AWS Account: {name} ({account_id})")
 
-    def cmd_edit_enter(self, entity_type: str, identifier: str) -> None:
-        """Enters builder context populated with existing entity data."""
-        etype = entity_type.lower()
-        # Initialize with explicit type to avoid Mypy inference issues
-        target_obj: Device | User | AWSAccount | Service | None = None
+    def cmd_edit(self, path: str) -> None:
+        """Enters builder context populated with existing entity data using full path resolution.
 
-        # 1. Locate the object
-        if etype == "device":
-            target_obj = self.operation.getDeviceByHostname(identifier)
-        elif etype == "user":
-            target_obj = next(
-                (u for u in self.operation.users if u.uid == identifier),
-                None,
-            )
-        elif etype == "awsaccount":
-            target_obj = next(
-                (
-                    a
-                    for a in self.operation.awsaccounts
-                    if getattr(a, "name", "") == identifier
-                    or getattr(a, "account_id", "") == identifier
-                ),
-                None,
-            )
+        Args:
+            path: Path to the object (e.g., "gateway_node", "gateway_node.peripherals.uart0")
+        """
+        # Use _resolve_path to find the object
+        target_obj = self._resolve_path(path)
 
-        if not target_obj:
+        if target_obj is None:
             self.rich_console.print(
-                f"[red][!] Could not find {entity_type} '{identifier}'[/]"
+                f"[red][!] Could not find object at path: {path}[/]"
             )
             return
 
-        # 2. Extract properties
-        props = {}
-        for k, v in target_obj.__dict__.items():
-            if not k.startswith("_"):
-                props[k] = v
+        # Determine entity type from object class
+        obj_type = target_obj.__class__.__name__.lower()
 
-        # 3. Enter Builder
-        cls = self.ENTITY_CLASSES.get(etype)
-        ctx = BuilderContext(etype, entity_class=cls)
+        # Extract properties using get_visible_state
+        props = get_visible_state(target_obj)
+
+        # Enter Builder with the resolved object
+        cls = self.ENTITY_CLASSES.get(obj_type)
+        ctx = BuilderContext(obj_type, entity_class=cls)
         ctx.properties = props
+        # Store original object reference for edit mode
+        ctx._original_object = target_obj
         self.builder_stack.append(ctx)
         self.rich_console.print(
-            f"[*] Editing {entity_type} '{identifier}' (Builder Mode)"
+            f"[*] Editing object at path: [bold cyan]{path}[/] (Builder Mode)"
         )
+
+    def cmd_delete(self, path: str) -> None:
+        """Delete an object from the operation using full path resolution.
+
+        Args:
+            path: Path to the object (e.g., "gateway_node", "gateway_node.peripherals.uart0")
+        """
+        # Use _resolve_path to find the object
+        target_obj = self._resolve_path(path)
+
+        if target_obj is None:
+            self.rich_console.print(
+                f"[red][!] Could not find object at path: {path}[/]"
+            )
+            return
+
+        # Get object type and identifier for display
+        obj_type = target_obj.__class__.__name__.lower()
+        obj_id = (
+            getattr(target_obj, "hostname", None)
+            or getattr(target_obj, "uid", None)
+            or getattr(target_obj, "name", None)
+            or getattr(target_obj, "title", None)
+            or str(target_obj)
+        )
+
+        # Safety confirmation
+        confirm = (
+            input(f"Are you sure you want to delete {obj_type} '{obj_id}'? (y/N): ")
+            .strip()
+            .lower()
+        )
+        if confirm != "y":
+            self.rich_console.print("[yellow]Delete cancelled.[/]")
+            return
+
+        # Find parent container and remove the object
+        success = self._remove_object_from_parent(path, target_obj)
+
+        if success:
+            self.rich_console.print(f"[bold green]✔[/] Deleted {obj_type}: {obj_id}")
+        else:
+            self.rich_console.print(
+                f"[red][!] Failed to delete {obj_type}: {obj_id}[/]"
+            )
+
+    def _remove_object_from_parent(self, path: str, target_obj: Any) -> bool:
+        """Remove an object from its parent container.
+
+        Args:
+            path: Path to the object
+            target_obj: The object to remove
+
+        Returns:
+            True if removal was successful, False otherwise
+        """
+        # Split path to get parent path
+        parts = path.replace("/", ".").split(".")
+        if len(parts) <= 1:
+            # Root level object - remove from operation
+            obj_type = target_obj.__class__.__name__.lower()
+
+            if obj_type == "device":
+                self.operation.devices = [
+                    d
+                    for d in self.operation.devices
+                    if d.hostname != target_obj.hostname
+                ]
+                return True
+            elif obj_type == "user":
+                self.operation.users = [
+                    u for u in self.operation.users if u.uid != target_obj.uid
+                ]
+                return True
+            elif obj_type == "awsaccount":
+                self.operation.cloud_accounts = [
+                    a
+                    for a in self.operation.cloud_accounts
+                    if getattr(a, "name", "") != getattr(target_obj, "name", "")
+                    and getattr(a, "account_id", "")
+                    != getattr(target_obj, "account_id", "")
+                ]
+                return True
+            elif obj_type == "vulnerability":
+                # Vulnerability at root level - remove from operation's devices
+                for device in self.operation.devices:
+                    device.vulnerabilities = [
+                        v for v in device.vulnerabilities if v.title != target_obj.title
+                    ]
+                return True
+
+            return False
+
+        # Nested object - get parent path
+        parent_path = ".".join(parts[:-1])
+        parent_obj = self._resolve_path(parent_path)
+
+        if parent_obj is None:
+            return False
+
+        # Get the field name (last part of path)
+        _field_name = parts[-1]
+
+        # Try to find and remove the object from parent's lists
+        obj_type = target_obj.__class__.__name__.lower()
+
+        if obj_type == "peripheral":
+            if hasattr(parent_obj, "peripherals") and isinstance(
+                parent_obj.peripherals, list
+            ):
+                parent_obj.peripherals = [
+                    p
+                    for p in parent_obj.peripherals
+                    if getattr(p, "name", "") != getattr(target_obj, "name", "")
+                ]
+                return True
+        elif obj_type == "service":
+            if hasattr(parent_obj, "services") and isinstance(
+                parent_obj.services, list
+            ):
+                parent_obj.services = [
+                    s
+                    for s in parent_obj.services
+                    if getattr(s, "app", "") != getattr(target_obj, "app", "")
+                ]
+                return True
+        elif obj_type == "vulnerability":
+            # Check device vulnerabilities
+            if hasattr(parent_obj, "vulnerabilities") and isinstance(
+                parent_obj.vulnerabilities, list
+            ):
+                parent_obj.vulnerabilities = [
+                    v for v in parent_obj.vulnerabilities if v.title != target_obj.title
+                ]
+                return True
+            # Check peripheral vulnerabilities
+            if hasattr(parent_obj, "peripherals"):
+                for p in parent_obj.peripherals:
+                    if hasattr(p, "vulnerabilities") and isinstance(
+                        p.vulnerabilities, list
+                    ):
+                        p.vulnerabilities = [
+                            v for v in p.vulnerabilities if v.title != target_obj.title
+                        ]
+                        return True
+
+        return False
 
     # --- Builder Context ---
 
@@ -941,6 +1263,176 @@ class WintermuteConsole:
 
         except Exception as e:
             self.rich_console.print(f"[red][!] Builder error: {e}[/]")
+
+    def _resolve_path(self, path: str) -> Any:
+        """Resolve a path string to an object in the operation tree.
+
+        Path format: gateway_node.peripherals."debug console" or gateway_node/peripherals/uart0
+        - First component: search self.operation.devices by hostname
+        - If device found, search device.peripherals or device.services by name/app
+        - If device found, search device.vulnerabilities by title
+        - If peripheral found, search peripheral.vulnerabilities by title
+        - If service found, search service.vulnerabilities by title
+        - Search self.operation.cloud_accounts by name/account_id
+        - Search self.operation.users by uid
+
+        Args:
+            path: Dot-separated path string (e.g., "gateway_node.peripherals.uart0")
+
+        Returns:
+            The resolved object, or None if not found.
+        """
+        if not path:
+            return None
+
+        # Parse path respecting quoted identifiers using regex
+        # Matches: word, "quoted string", 'quoted string'
+        parts = re.findall(r'[^."]+|"[^"]*"|\'[^\']*\'', path.replace("/", "."))
+        # Strip quotes from parts
+        parts = [p.strip("\"'") for p in parts]
+
+        if not parts:
+            return None
+
+        current: Any = None
+        remaining_parts = parts.copy()
+
+        # First, try to find the root object (device, user, cloud account)
+        root_name = parts[0]
+
+        # 1. Search devices by hostname
+        for device in self.operation.devices:
+            if device.hostname == root_name:
+                current = device
+                remaining_parts.pop(0)
+                break
+
+        # 2. Search cloud accounts by name or account_id
+        if current is None:
+            for acc in self.operation.cloud_accounts:
+                if (
+                    getattr(acc, "name", "") == root_name
+                    or getattr(acc, "account_id", "") == root_name
+                ):
+                    current = acc
+                    remaining_parts.pop(0)
+                    break
+
+        # 3. Search users by uid
+        if current is None:
+            for user in self.operation.users:
+                if user.uid == root_name:
+                    current = user
+                    remaining_parts.pop(0)
+                    break
+
+        # If we couldn't find the root, return None
+        if current is None:
+            return None
+
+        # Now traverse the remaining path components
+        for part in remaining_parts:
+            if current is None:
+                return None
+
+            # Check if current has a 'peripherals' list
+            if hasattr(current, "peripherals") and isinstance(
+                getattr(current, "peripherals", None), list
+            ):
+                for p in current.peripherals:
+                    if getattr(p, "name", "") == part:
+                        current = p
+                        break
+                else:
+                    # Check services list
+                    if hasattr(current, "services") and isinstance(
+                        getattr(current, "services", None), list
+                    ):
+                        for s in current.services:
+                            if (
+                                getattr(s, "app", "") == part
+                                or getattr(s, "name", "") == part
+                            ):
+                                current = s
+                                break
+                        else:
+                            return None
+                    else:
+                        return None
+            # Check if current has a 'services' list (for devices)
+            elif hasattr(current, "services") and isinstance(
+                getattr(current, "services", None), list
+            ):
+                for s in current.services:
+                    if getattr(s, "app", "") == part or getattr(s, "name", "") == part:
+                        current = s
+                        break
+                else:
+                    return None
+            # Check if current has a 'vulnerabilities' list
+            elif hasattr(current, "vulnerabilities") and isinstance(
+                getattr(current, "vulnerabilities", None), list
+            ):
+                for v in current.vulnerabilities:
+                    if getattr(v, "title", "") == part:
+                        current = v
+                        break
+                else:
+                    return None
+            # Check if current has a 'processor' attribute
+            elif hasattr(current, "processor"):
+                if getattr(current.processor, "name", "") == part:
+                    current = current.processor
+                else:
+                    return None
+            # Check if current has 'iamusers' or 'iamroles' (AWS accounts)
+            elif hasattr(current, "iamusers"):
+                for u in current.iamusers:
+                    if getattr(u, "username", "") == part:
+                        current = u
+                        break
+                else:
+                    return None
+            elif hasattr(current, "iamroles"):
+                for r in current.iamroles:
+                    if getattr(r, "role_name", "") == part:
+                        current = r
+                        break
+                else:
+                    return None
+            else:
+                return None
+
+        return current
+
+    def cmd_vars(self, path: str) -> None:
+        """Display visible state variables for an object at the given path.
+
+        Args:
+            path: Path to the object (e.g., "gateway_node/peripherals/uart0")
+        """
+        obj = self._resolve_path(path)
+
+        if obj is None:
+            self.rich_console.print(f"[red][!] Unknown target: {path}[/]")
+            return
+
+        # Use get_visible_state to extract variables
+        state = get_visible_state(obj)
+
+        if not state:
+            self.rich_console.print(f"[yellow][!] No visible state for: {path}[/]")
+            return
+
+        # Display in a table
+        table = Table(title=f"Variables: {path}")
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="green")
+
+        for key, value in state.items():
+            table.add_row(key, self._format_value(value))
+
+        self.rich_console.print(table)
 
     def cmd_add_enter(
         self,
@@ -1443,53 +1935,131 @@ class WintermuteConsole:
             "[dim]Use 'setup <name>' to initialize an interface.[/]"
         )
 
+    def _get_backend_params(self, backend_name: str) -> list[tuple[str, str]]:
+        """Get constructor parameter names and types for a backend class.
+
+        Args:
+            backend_name: The name of the backend module (e.g., 'bugzilla')
+
+        Returns:
+            A list of (param_name, param_type) tuples for the __init__ method.
+        """
+        try:
+            # Import the backend module
+            mod = importlib.import_module(f"wintermute.backends.{backend_name}")
+
+            # Find the backend class (typically named after the module)
+            backend_class = None
+            for name, obj in inspect.getmembers(mod):
+                if inspect.isclass(obj) and name.lower() == backend_name.lower():
+                    backend_class = obj
+                    break
+
+            if backend_class is None:
+                return []
+
+            # Get the __init__ signature
+            sig = inspect.signature(backend_class.__init__)
+            params: list[tuple[str, str]] = []
+
+            for name, param in sig.parameters.items():
+                if name in ["self", "args", "kwargs"]:
+                    continue
+                # Get type annotation if available
+                if param.annotation != inspect.Parameter.empty:
+                    param_type = str(param.annotation)
+                else:
+                    param_type = "Any"
+                params.append((name, param_type))
+
+            return params
+        except Exception:
+            return []
+
     async def cmd_backend_setup(self, *args: str) -> None:
-        """Setup a specific backend."""
+        """Setup a specific backend using dynamic parameter discovery."""
         if len(args) < 1:
             self.rich_console.print("Usage: setup <type>")
             return
 
         itype = args[0].lower()
 
-        if itype == "bugzilla":
-            url = await self.session.prompt_async(
-                "Bugzilla URL (e.g. https://bz.example.com): "
+        # Get backend parameters dynamically
+        params = self._get_backend_params(itype)
+
+        if not params:
+            self.rich_console.print(
+                f"[yellow][!] No parameter info available for '{itype}'. Using defaults.[/]"
             )
-            api_key = await self.session.prompt_async("API Key: ", is_password=True)
-            if url and api_key:
-                backend = BugzillaBackend(base_url=url, api_key=api_key)
-                Ticket.register_backend("bugzilla", backend, make_default=True)
+
+        # Build kwargs from user input
+        kwargs: dict[str, Any] = {}
+        for param_name, param_type in params:
+            # Create prompt based on parameter name
+            prompt_text = f"{param_name}: "
+            is_password = (
+                "password" in param_name.lower() or "key" in param_name.lower()
+            )
+
+            value = await self.session.prompt_async(
+                prompt_text, is_password=is_password
+            )
+            if value:
+                # Try to infer type for common cases
+                if "path" in param_name.lower() or "dir" in param_name.lower():
+                    # Keep as string (path)
+                    kwargs[param_name] = value or None
+                elif param_type == "int" or "int" in param_type:
+                    try:
+                        kwargs[param_name] = int(value)
+                    except ValueError:
+                        kwargs[param_name] = value
+                elif param_type == "bool" or "bool" in param_type:
+                    kwargs[param_name] = value.lower() in ["true", "yes", "1"]
+                else:
+                    kwargs[param_name] = value
+
+        try:
+            # Import the backend module
+            mod = importlib.import_module(f"wintermute.backends.{itype}")
+
+            # Find the backend class
+            backend_class = None
+            for name, obj in inspect.getmembers(mod):
+                if inspect.isclass(obj) and name.lower() == itype.lower():
+                    backend_class = obj
+                    break
+
+            if backend_class is None:
                 self.rich_console.print(
-                    f"[bold green]✔[/] Interface established: Bugzilla @ {url}"
+                    f"[red][!] Could not find backend class for '{itype}'[/]"
+                )
+                return
+
+            # Instantiate backend with collected parameters
+            backend = backend_class(**kwargs)
+
+            # Register based on backend category
+            backend_category = getattr(mod, "__category__", "Miscellaneous").lower()
+
+            if "ticket" in backend_category or "bugzilla" in itype:
+                Ticket.register_backend(itype, backend, make_default=True)
+                self.rich_console.print(
+                    f"[bold green]✔[/] Ticket backend established: {itype}"
+                )
+            elif "report" in backend_category or "docx" in itype:
+                Report.register_backend(itype, backend, make_default=True)
+                self.rich_console.print(
+                    f"[bold green]✔[/] Reporting backend established: {itype}"
+                )
+            else:
+                Operation.register_backend(itype, backend, make_default=True)
+                self.rich_console.print(
+                    f"[bold green]✔[/] Backend established: {itype}"
                 )
 
-        elif itype == "json_storage":
-            path = await self.session.prompt_async(
-                "Storage directory (default: .wintermute_data): "
-            )
-            path = path or ".wintermute_data"
-            backend_s = JsonFileBackend(base_path=path)
-            Operation.register_backend("json_storage", backend_s, make_default=True)
-            self.operation.save()
-            self.rich_console.print(f"[bold green]✔[/] Persistence layer ready: {path}")
-
-        elif itype == "docx_report":
-            tpl_dir = await self.session.prompt_async(
-                "Templates directory (default: templates): "
-            )
-            tpl_dir = tpl_dir or "templates"
-            backend_r = DocxTplPerVulnBackend(
-                template_dir=tpl_dir,
-                main_template="report_main.docx",
-                vuln_template="report_vuln.docx",
-            )
-            Report.register_backend("word_tpl", backend_r, make_default=True)
-            self.rich_console.print(
-                f"[bold green]✔[/] Reporting module loaded: {tpl_dir}"
-            )
-
-        else:
-            self.rich_console.print(f"[red][!] neural interface '{itype}' unknown.[/]")
+        except Exception as e:
+            self.rich_console.print(f"[red][!] Backend setup error: {e}[/]")
 
     def cmd_tools(self, *args: str) -> None:
         if not args:
@@ -1567,8 +2137,12 @@ class WintermuteConsole:
             self.cmd_add_enter(entity)
             return True
 
-        elif cmd == "edit" and len(args) >= 2:
-            self.cmd_edit_enter(args[0], args[1])
+        elif cmd == "edit" and len(args) >= 1:
+            self.cmd_edit(" ".join(args))
+            return True
+
+        elif cmd == "delete" and len(args) >= 1:
+            self.cmd_delete(" ".join(args))
             return True
 
         elif cmd == "use" and args:
@@ -1593,6 +2167,10 @@ class WintermuteConsole:
                 self.rich_console.print(
                     f"Available Cartridges: {', '.join(self.available_cartridges)}"
                 )
+            return True
+
+        elif cmd == "vars" and args:
+            self.cmd_vars(" ".join(args))
             return True
 
         elif cmd == "ai" and args:
@@ -1753,8 +2331,7 @@ class WintermuteConsole:
                 if not handled:
                     if cmd:
                         self.rich_console.print(f"[red][!] Unknown command: {cmd}[/]")
-
-                else:
+                elif current_context != "wintermute":
                     self.rich_console.print(
                         f"[red]Unknown context: {current_context}[/]"
                     )
