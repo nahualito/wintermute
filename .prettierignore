@@ -4,3 +4,5 @@ htmlcov
 public
 site
 wintermute/.mypy_cache
+# Ignore RAG directory
+examples/knowledge_bases/tiny_hardware_test/

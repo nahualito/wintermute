@@ -1,1 +1,46 @@
-{"docstore/metadata": {"ef8e7323-be95-48c8-b7e1-ca0e3b6e4713": {"doc_hash": "4298b09b882b1ec18b7e981f393efd29f4e472be9cc0adf54c4ac7474ee0b3af"}, "c9d0ebdf-b023-4034-af42-4936093f8dc6": {"doc_hash": "b167ca499189768871f4a6324dd5fb0194b23228fa1f209d1ae38bc9179e56ea", "ref_doc_id": "ef8e7323-be95-48c8-b7e1-ca0e3b6e4713"}}, "docstore/ref_doc_info": {"ef8e7323-be95-48c8-b7e1-ca0e3b6e4713": {"node_ids": ["c9d0ebdf-b023-4034-af42-4936093f8dc6"], "metadata": {}}}, "docstore/data": {"c9d0ebdf-b023-4034-af42-4936093f8dc6": {"__data__": {"id_": "c9d0ebdf-b023-4034-af42-4936093f8dc6", "embedding": null, "metadata": {}, "excluded_embed_metadata_keys": [], "excluded_llm_metadata_keys": [], "relationships": {"1": {"node_id": "ef8e7323-be95-48c8-b7e1-ca0e3b6e4713", "node_type": "4", "metadata": {}, "hash": "4298b09b882b1ec18b7e981f393efd29f4e472be9cc0adf54c4ac7474ee0b3af", "class_name": "RelatedNodeInfo"}}, "metadata_template": "{key}: {value}", "metadata_separator": "\n", "text": "The Wintermute Quantum Processor uses 1.2 Volts on the VCC_CORE pin. The JTAG debugging pins are located on header J42. Overclocking past 4.5GHz will trigger a thermal failsafe.", "mimetype": "text/plain", "start_char_idx": 0, "end_char_idx": 177, "text_template": "{metadata_str}\n\n{content}", "class_name": "TextNode"}, "__type__": "1"}}}
+{
+  "docstore/metadata": {
+    "ef8e7323-be95-48c8-b7e1-ca0e3b6e4713": {
+      "doc_hash": "4298b09b882b1ec18b7e981f393efd29f4e472be9cc0adf54c4ac7474ee0b3af"
+    },
+    "c9d0ebdf-b023-4034-af42-4936093f8dc6": {
+      "doc_hash": "b167ca499189768871f4a6324dd5fb0194b23228fa1f209d1ae38bc9179e56ea",
+      "ref_doc_id": "ef8e7323-be95-48c8-b7e1-ca0e3b6e4713"
+    }
+  },
+  "docstore/ref_doc_info": {
+    "ef8e7323-be95-48c8-b7e1-ca0e3b6e4713": {
+      "node_ids": ["c9d0ebdf-b023-4034-af42-4936093f8dc6"],
+      "metadata": {}
+    }
+  },
+  "docstore/data": {
+    "c9d0ebdf-b023-4034-af42-4936093f8dc6": {
+      "__data__": {
+        "id_": "c9d0ebdf-b023-4034-af42-4936093f8dc6",
+        "embedding": null,
+        "metadata": {},
+        "excluded_embed_metadata_keys": [],
+        "excluded_llm_metadata_keys": [],
+        "relationships": {
+          "1": {
+            "node_id": "ef8e7323-be95-48c8-b7e1-ca0e3b6e4713",
+            "node_type": "4",
+            "metadata": {},
+            "hash": "4298b09b882b1ec18b7e981f393efd29f4e472be9cc0adf54c4ac7474ee0b3af",
+            "class_name": "RelatedNodeInfo"
+          }
+        },
+        "metadata_template": "{key}: {value}",
+        "metadata_separator": "\n",
+        "text": "The Wintermute Quantum Processor uses 1.2 Volts on the VCC_CORE pin. The JTAG debugging pins are located on header J42. Overclocking past 4.5GHz will trigger a thermal failsafe.",
+        "mimetype": "text/plain",
+        "start_char_idx": 0,
+        "end_char_idx": 177,
+        "text_template": "{metadata_str}\n\n{content}",
+        "class_name": "TextNode"
+      },
+      "__type__": "1"
+    }
+  }
+}

@@ -1,1 +1,8 @@
-{"index_store/data": {"494b82ec-b2fe-4df2-a615-873fbd32a874": {"__type__": "vector_store", "__data__": "{\"index_id\": \"494b82ec-b2fe-4df2-a615-873fbd32a874\", \"summary\": null, \"nodes_dict\": {\"c9d0ebdf-b023-4034-af42-4936093f8dc6\": \"c9d0ebdf-b023-4034-af42-4936093f8dc6\"}, \"doc_id_dict\": {}, \"embeddings_dict\": {}}"}}}
+{
+  "index_store/data": {
+    "494b82ec-b2fe-4df2-a615-873fbd32a874": {
+      "__type__": "vector_store",
+      "__data__": "{\"index_id\": \"494b82ec-b2fe-4df2-a615-873fbd32a874\", \"summary\": null, \"nodes_dict\": {\"c9d0ebdf-b023-4034-af42-4936093f8dc6\": \"c9d0ebdf-b023-4034-af42-4936093f8dc6\"}, \"doc_id_dict\": {}, \"embeddings_dict\": {}}"
+    }
+  }
+}

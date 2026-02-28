@@ -1,5 +1,5 @@
 {
-  "base_provider_id": "bedrock", 
-  "embed_provider_id": "local_embedder", 
+  "base_provider_id": "bedrock",
+  "embed_provider_id": "local_embedder",
   "embed_model_id": "BAAI/bge-small-en-v1.5"
 }
