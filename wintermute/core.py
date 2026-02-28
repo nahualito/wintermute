@@ -395,18 +395,19 @@ class Analyst(BaseModel):
             f"Created Analyst: {self.name} with userid: {self.userid} and email: {self.email}"
         )
 
-    def isValidEmail(self, email: str) -> bool:
+    def isValidEmail(self, email: str | None) -> bool:
         """Check that the email has the correct format, we do not check the email is deliverable, left to the user.
 
         Returns:
             bool: True if it's valid, false if it's incorrect format
         """
-        if len(email) > 7:
-            if (
-                re.search(r"^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$", email)
-                is not None
-            ):
-                return True
+        if not email or len(email) < 5:
+            return False
+        if (
+            re.search(r"^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,})+$", email)
+            is not None
+        ):
+            return True
         return False
 
     def isValidName(self, name: str) -> bool:

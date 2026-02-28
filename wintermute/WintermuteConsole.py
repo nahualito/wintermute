@@ -10,6 +10,7 @@ import importlib
 import inspect
 import logging
 import os
+import re
 import shlex
 from enum import Enum
 from pathlib import Path
@@ -33,7 +34,9 @@ from wintermute.ai.tools_runtime import tools as global_tool_registry
 from wintermute.ai.use import tool_calling_chat
 from wintermute.ai.utils.tool_factory import register_tools
 from wintermute.backends.json_storage import JsonFileBackend
-from wintermute.core import AWSAccount, Device, Operation, Service, User
+from wintermute.basemodels import CloudAccount
+from wintermute.cloud.aws import AWSService, AWSUser, IAMRole, IAMUser
+from wintermute.core import Analyst, AWSAccount, Device, Operation, Service, User
 from wintermute.findings import Vulnerability
 from wintermute.hardware import Architecture, Memory, Processor
 from wintermute.peripherals import (
@@ -124,10 +127,16 @@ class WintermuteConsole:
         self.builder_stack: List[BuilderContext] = []
 
         # Entity Factory Mapping
-        self.ENTITY_CLASSES = {
+        self.ENTITY_CLASSES: dict[str, type[Any]] = {
+            "analyst": Analyst,
             "device": Device,
             "user": User,
-            "awsaccount": AWSAccount,
+            "cloudaccount": CloudAccount,
+            "awsaccount": AWSAccount,  # backward compat alias
+            "awsuser": AWSUser,
+            "iamuser": IAMUser,
+            "iamrole": IAMRole,
+            "awsservice": AWSService,
             "service": Service,
             "uart": UART,
             "jtag": JTAG,
@@ -143,7 +152,7 @@ class WintermuteConsole:
             "vulnerability": Vulnerability,
         }
 
-        self.PERIPHERAL_MAP = {
+        self.PERIPHERAL_MAP: dict[str, type[Any]] = {
             "uart": UART,
             "jtag": JTAG,
             "tpm": TPM,
@@ -152,6 +161,19 @@ class WintermuteConsole:
             "bluetooth": Bluetooth,
             "usb": USB,
             "pcie": PCIe,
+        }
+
+        self.CLOUD_NESTED_MAP: dict[str, tuple[type[Any], str]] = {
+            "awsuser": (AWSUser, "users"),
+            "iamuser": (IAMUser, "iamusers"),
+            "iamrole": (IAMRole, "iamroles"),
+            "awsservice": (AWSService, "services"),
+        }
+
+        # Cloud type → entity class mapping
+        self.CLOUD_TYPE_MAP: dict[str, type[Any]] = {
+            "aws": AWSAccount,
+            "generic": CloudAccount,
         }
 
         # Modules Cache
@@ -178,8 +200,10 @@ class WintermuteConsole:
 
         self.style = Style.from_dict(
             {
-                "prompt": "bold cyan",
-                "context": "bold yellow",
+                "prompt": "bold ansibrightcyan",
+                "path": "bold ansibrightgreen",
+                "context": "bold ansibrightmagenta",
+                "separator": "ansicyan",
             }
         )
 
@@ -204,6 +228,47 @@ class WintermuteConsole:
             if inspect.isclass(obj) and obj.__module__ == module.__name__:
                 return obj
         return None
+
+    def _is_cloud_builder_aws(self) -> bool:
+        """Check if the current cloudaccount builder is set to AWS type."""
+        if not self.builder_stack:
+            return False
+        active = self.builder_stack[-1]
+        if active.entity_name not in ("cloudaccount", "awsaccount"):
+            return False
+        if active.entity_name == "awsaccount":
+            return True
+        cloud_type = active.properties.get("cloud_type", "")
+        return str(cloud_type).upper() == "AWS"
+
+    def _extract_argparse_args(self, method: Any) -> str:
+        """Inspect source of a do_* method and extract argparse argument flags.
+
+        Args:
+            method: The bound method to inspect.
+
+        Returns:
+            A formatted string of discovered arguments, e.g. "-p/--public, -r/--random".
+        """
+        try:
+            source = inspect.getsource(method)
+        except (OSError, TypeError):
+            return ""
+
+        # Match add_argument calls and extract flag names
+        pattern = r"add_argument\(\s*(['\"].*?['\"](?:\s*,\s*['\"].*?['\"])*)"
+        matches = re.findall(pattern, source)
+        if not matches:
+            return ""
+
+        flags: list[str] = []
+        for match in matches:
+            # Extract individual string literals from the match
+            args = re.findall(r"['\"]([^'\"]+)['\"]", match)
+            if args:
+                flags.append("/".join(args))
+
+        return ", ".join(flags)
 
     def _scan_backends(self) -> Dict[str, Dict[str, str]]:
         """
@@ -256,18 +321,22 @@ class WintermuteConsole:
 
     def display_banner(self) -> None:
         banner = r"""
-  _      __.__        __                              __          
- /  \    /  \__| _____/  |_  ___________  _____  __ ___/  |_  ____  
- \   \/\/   /  |/    \   __\/ __ \_  __ \/     \|  |  \   __\/ __ \ 
-  \        /|  |   |  \  | \  ___/|  | \/  Y Y  \  |  /|  | \  ___/ 
+  _      __.__        __                              __
+ /  \    /  \__| _____/  |_  ___________  _____  __ ___/  |_  ____
+ \   \/\/   /  |/    \   __\/ __ \_  __ \/     \|  |  \   __\/ __ \
+  \        /|  |   |  \  | \  ___/|  | \/  Y Y  \  |  /|  | \  ___/
    \__/\  / |__|___|  /__|  \___  >__|  |__|_|  /____/ |__|  \___  >
-        \/          \/          \/            \/                 \/ 
-                                                                    
-         OFFENSIVE SECURITY FRAMEWORK & HARDWARE AUDIT SUITE
+        \/          \/          \/            \/                 \/
+
+                    onoSendai Cyberspace Deck 7
         """
-        self.rich_console.print(Panel(banner, style="bold red", expand=False))
+        self.rich_console.print(Panel(banner, border_style="bright_cyan", expand=False))
         self.rich_console.print(
-            f"[bold cyan]Workspace:[/] {self.operation.operation_name}"
+            '[dim cyan]"The sky above the port was the color of television, '
+            'tuned to a dead channel."[/]'
+        )
+        self.rich_console.print(
+            f"[bold cyan]Jacked into:[/] {self.operation.operation_name}"
         )
         if self.current_cartridge_name:
             self.rich_console.print(
@@ -276,23 +345,45 @@ class WintermuteConsole:
         self.rich_console.print("")
 
     def get_prompt_tokens(self) -> List[tuple[str, str]]:
-        tokens: List[tuple[str, str]] = [("class:prompt", "wintermute ")]
+        tokens: List[tuple[str, str]] = [("class:prompt", "onoSendai")]
 
-        # Check Context Stack
+        # Build hierarchical path
         current_ctx = self.context_stack[-1]
+        has_operation = current_ctx in ("operation", "backend") or (
+            current_ctx == "wintermute"
+            and self.operation.operation_name != "default"
+            and (self.builder_stack or self.current_cartridge_name)
+        )
 
+        # Show operation name when in any deeper context
+        if has_operation or current_ctx == "operation":
+            path_parts: list[str] = [self.operation.operation_name]
+
+            # Walk builder_stack to append entity segments
+            if hasattr(self, "builder_stack") and self.builder_stack:
+                for ctx in self.builder_stack:
+                    identifier = ctx.properties.get(
+                        "hostname",
+                        ctx.properties.get(
+                            "name",
+                            ctx.properties.get("uid", ""),
+                        ),
+                    )
+                    if identifier:
+                        path_parts.append(f"{ctx.entity_name}:{identifier}")
+                    else:
+                        path_parts.append(ctx.entity_name)
+
+            tokens.append(("class:separator", " ["))
+            tokens.append(("class:path", "/".join(path_parts)))
+            tokens.append(("class:separator", "]"))
+
+        # Show cartridge context after path
         if self.current_cartridge_name:
-            tokens.append(("class:context", f"exploit({self.current_cartridge_name})"))
-        elif hasattr(self, "builder_stack") and self.builder_stack:
-            # Show active builder context
-            active_builder = self.builder_stack[-1].entity_name
-            tokens.append(("class:context", f"add({active_builder})"))
-        elif current_ctx == "operation":
-            tokens.append(
-                ("class:context", f"operation({self.operation.operation_name})")
-            )
+            tokens.append(("class:context", f" exploit({self.current_cartridge_name})"))
+        # Show backend context
         elif current_ctx == "backend":
-            tokens.append(("class:context", "backend"))
+            tokens.append(("class:context", " backend"))
 
         tokens.append(("class:prompt", " > "))
         return tokens
@@ -307,17 +398,31 @@ class WintermuteConsole:
             active_ctx = self.builder_stack[-1]
             target_cls = active_ctx.entity_class
 
+            # For cloudaccount, resolve actual class based on cloud_type
+            effective_cls = target_cls
+            if (
+                active_ctx.entity_name in ("cloudaccount",)
+                and target_cls is CloudAccount
+            ):
+                cloud_type = active_ctx.properties.get("cloud_type", "")
+                resolved = self.CLOUD_TYPE_MAP.get(str(cloud_type).lower())
+                if resolved:
+                    effective_cls = resolved
+
             # Dynamic 'set' suggestions using inspect.signature
             set_suggestions: Dict[str, Any] = {}
-            if target_cls:
+            if effective_cls:
                 try:
-                    sig = inspect.signature(target_cls.__init__)
+                    sig = inspect.signature(effective_cls.__init__)
                     for name, param in sig.parameters.items():
                         if name in ["self", "args", "kwargs"]:
                             continue
                         set_suggestions[name] = None
                 except Exception:
                     pass
+            # Always offer cloud_type in cloudaccount builders
+            if active_ctx.entity_name in ("cloudaccount",):
+                set_suggestions["cloud_type"] = {k: None for k in self.CLOUD_TYPE_MAP}
 
             # Define commands ONLY valid inside the builder
             builder_commands: Dict[str, Any] = {
@@ -344,6 +449,19 @@ class WintermuteConsole:
                     "memory": None,
                     "architecture": None,
                 }
+            elif active_ctx.entity_name in ("cloudaccount", "awsaccount"):
+                if self._is_cloud_builder_aws():
+                    builder_commands["add"] = {
+                        "iamuser": None,
+                        "iamrole": None,
+                        "awsservice": None,
+                        "awsuser": None,
+                        "vulnerability": None,
+                    }
+                else:
+                    builder_commands["add"] = {
+                        "vulnerability": None,
+                    }
 
             return NestedCompleter.from_nested_dict(builder_commands)
 
@@ -364,7 +482,7 @@ class WintermuteConsole:
                 "device": None,
                 "user": None,
                 "service": None,
-                "awsaccount": None,
+                "cloudaccount": None,
             },
             "edit": None,
             "delete": None,
@@ -400,9 +518,14 @@ class WintermuteConsole:
                     "device": None,
                     "user": None,
                     "service": None,
-                    "awsaccount": None,
+                    "cloudaccount": None,
                 },
-                "use": {c: None for c in self.available_cartridges},
+                "use": {
+                    "load": {c: None for c in self.available_cartridges},
+                    "unload": None,
+                    "list": None,
+                    **{c: None for c in self.available_cartridges},
+                },
                 "show": {
                     "options": None,
                     "commands": None,
@@ -434,9 +557,9 @@ class WintermuteConsole:
             edit_targets: Dict[str, Any] = {
                 "device": {d.hostname: None for d in self.operation.devices},
                 "user": {u.uid: None for u in self.operation.users},
-                "awsaccount": {
+                "cloudaccount": {
                     a.name: None
-                    for a in self.operation.awsaccounts
+                    for a in self.operation.cloud_accounts
                     if hasattr(a, "name")
                 },
             }
@@ -501,7 +624,17 @@ class WintermuteConsole:
             base_commands["delete"] = all_delete_targets
 
             if self.current_cartridge_name:
-                base_commands["set"] = {opt: None for opt in self.cartridge_options}
+                set_opts = {opt: None for opt in self.cartridge_options}
+                # Merge instance self.options keys if available
+                if self.current_cartridge_instance and hasattr(
+                    self.current_cartridge_instance, "options"
+                ):
+                    inst_opts = self.current_cartridge_instance.options
+                    if isinstance(inst_opts, dict):
+                        for k in inst_opts:
+                            if k not in set_opts:
+                                set_opts[k] = None
+                base_commands["set"] = set_opts
                 base_commands["run"] = None
                 # Dynamic commands from cartridge
                 if self.current_cartridge_instance:
@@ -520,6 +653,34 @@ class WintermuteConsole:
                 "list": None,
                 "available": None,
                 "setup": backend_setup_options,
+                "ai": {
+                    "model": {
+                        "set": {m: None for m in available_models},
+                        "list": None,
+                    },
+                    "rag": {
+                        "list": None,
+                        "use": {r: None for r in available_rags},
+                        "off": None,
+                        "scan": None,
+                    },
+                    "chat": None,
+                },
+                "tools": {
+                    "load": None,
+                    "list": None,
+                },
+                "show": {
+                    "options": None,
+                    "commands": None,
+                    "cartridges": None,
+                },
+                "use": {
+                    "load": {c: None for c in self.available_cartridges},
+                    "unload": None,
+                    "list": None,
+                    **{c: None for c in self.available_cartridges},
+                },
             }
             return NestedCompleter.from_nested_dict(backend_commands)
 
@@ -536,6 +697,34 @@ class WintermuteConsole:
                 "save": None,
                 "load": None,
                 "delete": None,
+                "ai": {
+                    "model": {
+                        "set": {m: None for m in available_models},
+                        "list": None,
+                    },
+                    "rag": {
+                        "list": None,
+                        "use": {r: None for r in available_rags},
+                        "off": None,
+                        "scan": None,
+                    },
+                    "chat": None,
+                },
+                "tools": {
+                    "load": None,
+                    "list": None,
+                },
+                "show": {
+                    "options": None,
+                    "commands": None,
+                    "cartridges": None,
+                },
+                "use": {
+                    "load": {c: None for c in self.available_cartridges},
+                    "unload": None,
+                    "list": None,
+                    **{c: None for c in self.available_cartridges},
+                },
             }
             return NestedCompleter.from_nested_dict(op_commands)
 
@@ -547,7 +736,7 @@ class WintermuteConsole:
     def cmd_operation_create(self, name: str) -> None:
         self.operation = Operation(operation_name=name)
         self.rich_console.print(
-            f"[*] Created new operation context: [bold cyan]{name}[/]"
+            f"[*] New operation initialized... jacking in: [bold cyan]{name}[/]"
         )
         # Automatically enter the operation context
         self.cmd_operation_enter()
@@ -645,7 +834,7 @@ class WintermuteConsole:
         if Operation._active is None:
             self.rich_console.print(
                 Panel(
-                    "[bold red]NO ACTIVE OPERATION[/bold red]\n"
+                    "[bold red]NO ACTIVE OPERATION — FLATLINE[/bold red]\n"
                     "Create an operation with 'operation create <name>'",
                     title="Status",
                     border_style="red",
@@ -799,9 +988,14 @@ class WintermuteConsole:
         else:
             self.rich_console.print(f"[red][!] Device {device_hostname} not found.[/]")
 
+    def cmd_add_cloudaccount(self, name: str, account_id: str) -> None:
+        if self.operation.addCloudAccount(
+            name, cloud_type="AWS", account_id=account_id
+        ):
+            self.rich_console.print(f"[+] Added Cloud Account: {name} ({account_id})")
+
     def cmd_add_awsaccount(self, name: str, account_id: str) -> None:
-        if self.operation.addAWSAccount(name, account_id=account_id):
-            self.rich_console.print(f"[+] Added AWS Account: {name} ({account_id})")
+        self.cmd_add_cloudaccount(name, account_id)
 
     def cmd_edit(self, path: str) -> None:
         """Enters builder context populated with existing entity data using full path resolution.
@@ -916,7 +1110,9 @@ class WintermuteConsole:
 
         # Handle explicit typing (e.g., "device.hostname.peripheral.name")
         if parts[0] in (
+            "analyst",
             "device",
+            "cloudaccount",
             "cloud_account",
             "user",
             "awsaccount",
@@ -930,6 +1126,9 @@ class WintermuteConsole:
 
         if len(parts) == 1:
             # Root level object - remove from operation
+            if target_obj in self.operation.analysts:
+                self.operation.analysts.remove(target_obj)
+                return True
             if target_obj in self.operation.devices:
                 self.operation.devices.remove(target_obj)
                 return True
@@ -1004,6 +1203,11 @@ class WintermuteConsole:
 
         active_builder = self.builder_stack[-1]
 
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        elif len(value) >= 2 and value.startswith("'") and value.endswith("'"):
+            value = value[1:-1]
+
         # Simple type inference - use a Union type for the inferred value
         val: str | int | bool
         if value.isdigit():
@@ -1017,6 +1221,25 @@ class WintermuteConsole:
 
         active_builder.properties[key] = val
         self.rich_console.print(f"[*] Set {key} = {val}")
+
+        # Dynamic cloud_type switching for cloudaccount builders
+        if (
+            key == "cloud_type"
+            and active_builder.entity_name in ("cloudaccount",)
+            and isinstance(val, str)
+        ):
+            resolved_cls = self.CLOUD_TYPE_MAP.get(val.lower())
+            if resolved_cls:
+                active_builder.entity_class = resolved_cls
+                self.rich_console.print(
+                    f"[*] Cloud account type set to [bold cyan]{val.upper()}[/] "
+                    f"— attributes updated"
+                )
+            else:
+                self.rich_console.print(
+                    f"[yellow][!] Unknown cloud type '{val}'. "
+                    f"Available: {', '.join(self.CLOUD_TYPE_MAP.keys())}[/]"
+                )
 
     def cmd_builder_show(self) -> None:
         """Shows the current builder state."""
@@ -1116,7 +1339,17 @@ class WintermuteConsole:
                     return
 
                 success = False
-                if target == "device" and isinstance(entity_obj, Device):
+                if target == "analyst" and isinstance(entity_obj, Analyst):
+                    if self.operation.addAnalyst(
+                        name=entity_obj.name,
+                        userid=entity_obj.userid,
+                        email=entity_obj.email or "",
+                    ):
+                        self.rich_console.print(
+                            f"[bold green]✔[/] Saved Analyst: {entity_obj.name} ({entity_obj.userid})"
+                        )
+                        success = True
+                elif target == "device" and isinstance(entity_obj, Device):
                     if self.operation.addDevice(
                         hostname=entity_obj.hostname,
                         ipaddr=entity_obj.ipaddr,
@@ -1143,15 +1376,31 @@ class WintermuteConsole:
                             f"[bold green]✔[/] Saved User: {entity_obj.uid}"
                         )
                         success = True
-                elif target == "awsaccount" and isinstance(entity_obj, AWSAccount):
-                    if self.operation.addCloudAccount(
-                        name=entity_obj.name,
-                        cloud_type="AWS",
-                        account_id=entity_obj.account_id,
-                        vulnerabilities=getattr(entity_obj, "vulnerabilities", []),
-                    ):
+                elif target in ("cloudaccount", "awsaccount") and isinstance(
+                    entity_obj, (CloudAccount, AWSAccount)
+                ):
+                    # Determine the actual cloud_type from properties or entity
+                    save_cloud_type = data.get(
+                        "cloud_type", getattr(entity_obj, "cloud_type", "generic")
+                    )
+                    save_kwargs: dict[str, Any] = {
+                        "name": entity_obj.name,
+                        "cloud_type": str(save_cloud_type),
+                        "vulnerabilities": getattr(entity_obj, "vulnerabilities", []),
+                    }
+                    if isinstance(entity_obj, AWSAccount):
+                        save_kwargs.update(
+                            {
+                                "account_id": entity_obj.account_id,
+                                "iamusers": getattr(entity_obj, "iamusers", []),
+                                "iamroles": getattr(entity_obj, "iamroles", []),
+                                "users": getattr(entity_obj, "users", []),
+                                "services": getattr(entity_obj, "services", []),
+                            }
+                        )
+                    if self.operation.addCloudAccount(**save_kwargs):
                         self.rich_console.print(
-                            f"[bold green]✔[/] Saved AWS Account: {entity_obj.name}"
+                            f"[bold green]✔[/] Saved Cloud Account: {entity_obj.name}"
                         )
                         success = True
                 elif target == "service" and isinstance(entity_obj, Service):
@@ -1265,7 +1514,9 @@ class WintermuteConsole:
 
         # Handle explicit typing prefixes (e.g., "device.hostname")
         type_prefixes = (
+            "analyst",
             "device",
+            "cloudaccount",
             "cloud_account",
             "user",
             "awsaccount",
@@ -1282,11 +1533,17 @@ class WintermuteConsole:
         current: Any = None
         root_name = parts[0]
 
-        # Search devices (hostname)
-        for d in self.operation.devices:
-            if d.hostname == root_name:
-                current = d
+        # Search analysts (userid or name)
+        for a in self.operation.analysts:
+            if a.userid == root_name or a.name == root_name:
+                current = a
                 break
+        # Search devices (hostname)
+        if current is None:
+            for d in self.operation.devices:
+                if d.hostname == root_name:
+                    current = d
+                    break
         # Search users (uid)
         if current is None:
             for u in self.operation.users:
@@ -1430,7 +1687,7 @@ class WintermuteConsole:
             entity_type, entity_class=cls, parent_list_name=parent_list
         )
         self.builder_stack.append(ctx)
-        self.rich_console.print(f"[*] Entering builder for {entity_type}...")
+        self.rich_console.print(f"[*] Constructing {entity_type} node...")
 
     def cmd_back(self) -> None:
         """Pops the current context from the stack."""
@@ -1451,7 +1708,58 @@ class WintermuteConsole:
 
     # --- Local Context (Cartridge) ---
 
-    def cmd_use(self, cartridge_name: str) -> None:
+    def cmd_use(self, *args: str) -> None:
+        """Sub-menu dispatcher for cartridge management."""
+        if not args:
+            # Bare 'use' — show sub-menu help
+            table = Table(title="use — Cartridge Management")
+            table.add_column("Command", style="cyan")
+            table.add_column("Description", style="white")
+            table.add_row("use list", "List available cartridges")
+            table.add_row("use load <name>", "Load a cartridge")
+            table.add_row("use unload", "Unload current cartridge")
+            table.add_row("use <name>", "Load a cartridge (shorthand)")
+            self.rich_console.print(table)
+            return
+
+        sub = args[0].lower()
+        if sub == "list":
+            self._cmd_use_list()
+        elif sub == "unload":
+            self._cmd_use_unload()
+        elif sub == "load" and len(args) >= 2:
+            self._cmd_use_load(args[1])
+        else:
+            # Backward compat: treat as cartridge name
+            self._cmd_use_load(sub)
+
+    def _cmd_use_list(self) -> None:
+        """List available cartridges with loaded status."""
+        table = Table(title="Available Cartridges")
+        table.add_column("Name", style="cyan")
+        table.add_column("Status", style="green")
+
+        for c in self.available_cartridges:
+            if c == self.current_cartridge_name:
+                table.add_row(c, "[bold green]LOADED[/]")
+            else:
+                table.add_row(c, "available")
+
+        self.rich_console.print(table)
+
+    def _cmd_use_unload(self) -> None:
+        """Unload the current cartridge."""
+        if not self.current_cartridge_name:
+            self.rich_console.print("[yellow][!] No cartridge loaded.[/]")
+            return
+        name = self.current_cartridge_name
+        self.current_cartridge_name = None
+        self.current_cartridge_instance = None
+        self.cartridge_options = {}
+        self.rich_console.print(f"[*] Cartridge unloaded: {name}")
+
+    def _cmd_use_load(self, cartridge_name: str) -> None:
+        """Load a cartridge by name, introspect options and instantiate."""
         if cartridge_name not in self.available_cartridges:
             self.rich_console.print(
                 f"[red][!] Cartridge {cartridge_name} not found.[/]"
@@ -1470,7 +1778,6 @@ class WintermuteConsole:
                 return
 
             self.current_cartridge_name = cartridge_name
-            self.current_cartridge_instance = None  # Wait for 'run' or initialization
 
             # Introspect options from __init__
             self.cartridge_options = {}
@@ -1485,8 +1792,14 @@ class WintermuteConsole:
                 )
                 self.cartridge_options[name] = default
 
+            # Attempt to instantiate at load time for do_*/self.options discovery
+            try:
+                self.current_cartridge_instance = cls(**self.cartridge_options)
+            except Exception:
+                self.current_cartridge_instance = None
+
             self.rich_console.print(
-                f"[*] Loaded cartridge: [bold yellow]{cartridge_name}[/]"
+                f"[*] ICE-breaker loaded: [bold yellow]{cartridge_name}[/]"
             )
         except Exception as e:
             self.rich_console.print(f"[red][!] Error loading cartridge: {e}[/]")
@@ -1497,19 +1810,35 @@ class WintermuteConsole:
                 "[red][!] No cartridge selected. Use 'use <cartridge>' first.[/]"
             )
             return
-        if option not in self.cartridge_options:
-            self.rich_console.print(f"[red][!] Unknown option: {option}[/]")
+
+        # Try to cast value
+        cast_val: str | int | bool = value
+        if value.isdigit():
+            cast_val = int(value)
+        elif value.lower() in ["true", "false"]:
+            cast_val = value.lower() == "true"
+
+        # Check __init__ options first
+        if option in self.cartridge_options:
+            self.cartridge_options[option] = cast_val
+            self.rich_console.print(f"{option} => {value}")
             return
 
-        # Try to cast value if possible (crude)
-        if value.isdigit():
-            self.cartridge_options[option] = int(value)
-        elif value.lower() in ["true", "false"]:
-            self.cartridge_options[option] = value.lower() == "true"
-        else:
-            self.cartridge_options[option] = value
+        # Check instance self.options (e.g. tpm20 pattern)
+        if self.current_cartridge_instance and hasattr(
+            self.current_cartridge_instance, "options"
+        ):
+            inst_opts = self.current_cartridge_instance.options
+            if isinstance(inst_opts, dict) and option in inst_opts:
+                opt_data = inst_opts[option]
+                if isinstance(opt_data, dict):
+                    opt_data["value"] = cast_val
+                else:
+                    inst_opts[option] = cast_val
+                self.rich_console.print(f"{option} => {value}")
+                return
 
-        self.rich_console.print(f"{option} => {value}")
+        self.rich_console.print(f"[red][!] Unknown option: {option}[/]")
 
     def cmd_run(self) -> None:
         if not self.current_cartridge_name:
@@ -1533,7 +1862,9 @@ class WintermuteConsole:
             if self.current_cartridge_instance and hasattr(
                 self.current_cartridge_instance, "run"
             ):
-                self.rich_console.print(f"[*] Running {self.current_cartridge_name}...")
+                self.rich_console.print(
+                    f"[*] Executing ICE-breaker: {self.current_cartridge_name}..."
+                )
                 self.current_cartridge_instance.run()
             else:
                 self.rich_console.print(
@@ -1543,6 +1874,28 @@ class WintermuteConsole:
             self.rich_console.print(f"[red][!] Execution error: {e}[/]")
 
     # --- Information & Help ---
+
+    def cmd_show_current_context(self) -> None:
+        """Display the current operation's visible state in a Rich table."""
+        if Operation._active is None:
+            self.cmd_status()
+            return
+
+        state = get_visible_state(self.operation)
+        if not state:
+            self.rich_console.print(
+                "[yellow]No visible state for current operation.[/]"
+            )
+            return
+
+        table = Table(title=f"Operation: {self.operation.operation_name}")
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="green")
+
+        for key, value in state.items():
+            table.add_row(key, self._format_value(value))
+
+        self.rich_console.print(table)
 
     def show_options(self) -> None:
         if not self.current_cartridge_name:
@@ -1554,8 +1907,27 @@ class WintermuteConsole:
         table.add_column("Current Setting", style="green")
         table.add_column("Description", style="white")
 
+        shown_keys: set[str] = set()
         for opt, val in self.cartridge_options.items():
             table.add_row(opt, str(val), "")
+            shown_keys.add(opt)
+
+        # Show instance self.options (e.g. tpm20 pattern: {key: {value, description}})
+        if self.current_cartridge_instance and hasattr(
+            self.current_cartridge_instance, "options"
+        ):
+            inst_opts = self.current_cartridge_instance.options
+            if isinstance(inst_opts, dict):
+                for key, opt_data in inst_opts.items():
+                    if key in shown_keys:
+                        continue
+                    if isinstance(opt_data, dict):
+                        val = str(opt_data.get("value", ""))
+                        desc = str(opt_data.get("description", ""))
+                    else:
+                        val = str(opt_data)
+                        desc = ""
+                    table.add_row(key, val, desc)
 
         self.rich_console.print(table)
 
@@ -1565,7 +1937,7 @@ class WintermuteConsole:
         # 0. Builder Context Help
         if self.builder_stack:
             active = self.builder_stack[-1].entity_name
-            table = Table(title=f"Builder Menu ({active})")
+            table = Table(title=f"Construct // {active}")
             table.add_column("Command", style="cyan")
             table.add_column("Description", style="white")
             table.add_row("set <key> <val>", "Set property value")
@@ -1573,27 +1945,54 @@ class WintermuteConsole:
             table.add_row("save", "Commit and create entity")
             if active == "device":
                 table.add_row("add peripheral <type>", "Add a nested peripheral")
+                table.add_row("add service", "Add a service to device")
+                table.add_row("add processor", "Add a processor to device")
+                table.add_row("add memory", "Add memory to device")
+                table.add_row("add architecture", "Add architecture to device")
+            if active == "pcie":
+                table.add_row("add processor", "Add a processor")
+                table.add_row("add memory", "Add memory")
+                table.add_row("add architecture", "Add architecture")
+            if active in ("cloudaccount", "awsaccount"):
+                table.add_row(
+                    "set cloud_type <type>",
+                    "Set cloud provider (aws, generic)",
+                )
+                if self._is_cloud_builder_aws():
+                    table.add_row("add iamuser", "Add an IAM user")
+                    table.add_row("add iamrole", "Add an IAM role")
+                    table.add_row("add awsservice", "Add an AWS service")
+                    table.add_row("add awsuser", "Add an AWS user")
+                table.add_row("add vulnerability", "Add a finding")
             if active in ["service", "peripheral", "device"]:
                 table.add_row("add vulnerability", "Add a finding")
+            table.add_row("status", "Show operation status tree")
+            table.add_row("vars <path>", "Inspect object variables")
+            table.add_row("help", "Show this help")
             table.add_row("back", "Discard and return")
             self.rich_console.print(table)
             return
 
         # 1. Backend Context Help
         if current_context == "backend":
-            table = Table(title="Backend Menu Commands")
+            table = Table(title="Backend Neural Interface")
             table.add_column("Command", style="cyan")
             table.add_column("Description", style="white")
             table.add_row("list", "Show active backend connections")
             table.add_row("available", "List supported backend types")
             table.add_row("setup <type>", "Configure a new backend interface")
+            table.add_row("status", "Show operation status tree")
+            table.add_row("vars <path>", "Inspect object variables")
+            table.add_row("ai <cmd>", "AI management and chat (try 'help ai')")
+            table.add_row("tools <cmd>", "AI tool management (try 'help tools')")
+            table.add_row("workspace switch <name>", "Switch active operation")
             table.add_row("back", "Return to main menu")
             self.rich_console.print(table)
             return
 
         # 2. Operation Context Help
         if current_context == "operation":
-            table = Table(title="Operation Menu Commands")
+            table = Table(title="Operation Deck Commands")
             table.add_column("Command", style="cyan")
             table.add_column("Description", style="white")
             table.add_row(
@@ -1602,6 +2001,16 @@ class WintermuteConsole:
             table.add_row("save", "Save operation to backend")
             table.add_row("load <name>", "Load operation from backend")
             table.add_row("delete <name>", "Delete operation from backend")
+            table.add_row("add <type>", "Add objects to workspace (try 'help add')")
+            table.add_row("edit <path>", "Edit an existing object")
+            table.add_row("delete <path>", "Delete an object from operation")
+            table.add_row("vars <path>", "Inspect object variables")
+            table.add_row("status", "Show operation status tree")
+            table.add_row("show", "Show current operation state")
+            table.add_row("use [load|unload|list]", "Manage ICE-breaker cartridges")
+            table.add_row("ai <cmd>", "AI management and chat (try 'help ai')")
+            table.add_row("tools <cmd>", "AI tool management (try 'help tools')")
+            table.add_row("workspace switch <name>", "Switch active operation")
             table.add_row("back", "Return to main menu")
             self.rich_console.print(table)
             return
@@ -1610,7 +2019,7 @@ class WintermuteConsole:
         if topic:
             topic = topic.lower()
             if topic == "ai":
-                table = Table(title="AI Commands")
+                table = Table(title="AI Neural Link Commands")
                 table.add_column("Sub-command", style="cyan")
                 table.add_column("Usage", style="magenta")
                 table.add_column("Description", style="white")
@@ -1651,33 +2060,95 @@ class WintermuteConsole:
                 table.add_row("device", "add device <hostname> [ip]")
                 table.add_row("user", "add user <uid> <name> <email>")
                 table.add_row("service", "add service <host> <port> <app>")
-                table.add_row("awsaccount", "add awsaccount <name> <id>")
+                table.add_row("cloudaccount", "add cloudaccount <name> <id>")
+                self.rich_console.print(table)
+                return
+            elif topic == "show":
+                table = Table(title="Show Commands")
+                table.add_column("Usage", style="cyan")
+                table.add_column("Description", style="white")
+                table.add_row("show", "Show current context state")
+                table.add_row("show options", "Show cartridge options")
+                table.add_row("show commands", "Show available commands")
+                table.add_row("show cartridges", "List available cartridges")
+                table.add_row("show <path>", "Inspect object at path (alias for vars)")
+                self.rich_console.print(table)
+                return
+            elif topic == "edit":
+                table = Table(title="Edit Commands")
+                table.add_column("Usage", style="cyan")
+                table.add_column("Description", style="white")
+                table.add_row("edit <path>", "Enter builder for existing object")
+                table.add_row("edit device.hostname", "Edit a device by hostname")
+                table.add_row(
+                    "edit host.peripherals.uart0",
+                    "Edit nested peripheral",
+                )
+                self.rich_console.print(table)
+                return
+            elif topic == "delete":
+                table = Table(title="Delete Commands")
+                table.add_column("Usage", style="cyan")
+                table.add_column("Description", style="white")
+                table.add_row("delete <path>", "Remove an object from the operation")
+                table.add_row("delete hostname", "Delete a device")
+                table.add_row(
+                    "delete host.peripherals.uart0",
+                    "Delete nested peripheral",
+                )
                 self.rich_console.print(table)
                 return
 
-        table = Table(title="Global Commands")
-        table.add_column("Command", style="cyan")
-        table.add_column("Description", style="white")
-        table.add_row("operation [create]", "Manage operations (enter menu or create)")
-        table.add_row("status", "Show visual status tree of current operation")
-        table.add_row("add <type>", "Add objects to workspace (try 'help add')")
-        table.add_row("use <cartridge>", "Select a module to use")
-        table.add_row("ai <cmd>", "AI management and chat (try 'help ai')")
-        table.add_row("backend", "Enter backend management menu")
-        table.add_row("tools <cmd>", "AI tool management (try 'help tools')")
-        table.add_row("back", "Exit current context")
-        table.add_row("exit", "Terminate the console")
-
+        # 4. Cartridge Context Help (when a cartridge is loaded)
         if self.current_cartridge_instance:
-            m_table = Table(title=f"Cartridge Commands ({self.current_cartridge_name})")
+            m_table = Table(
+                title=f"ICE-breaker Commands ({self.current_cartridge_name})"
+            )
             m_table.add_column("Command", style="yellow")
+            m_table.add_column("Arguments", style="magenta")
             m_table.add_column("Description", style="white")
             for name, obj in inspect.getmembers(
                 self.current_cartridge_instance, predicate=inspect.ismethod
             ):
                 if name.startswith("do_"):
-                    m_table.add_row(name[3:], obj.__doc__ or "No description")
+                    arg_str = self._extract_argparse_args(obj)
+                    m_table.add_row(
+                        name[3:], arg_str or "", obj.__doc__ or "No description"
+                    )
             self.rich_console.print(m_table)
+
+            ctx_table = Table(title="Cartridge Context Commands")
+            ctx_table.add_column("Command", style="cyan")
+            ctx_table.add_column("Description", style="white")
+            ctx_table.add_row("set <option> <value>", "Set cartridge option")
+            ctx_table.add_row("show options", "Show cartridge options")
+            ctx_table.add_row("run", "Execute cartridge")
+            ctx_table.add_row("status", "Show operation status tree")
+            ctx_table.add_row("vars <path>", "Inspect object variables")
+            ctx_table.add_row("use unload", "Unload current cartridge")
+            ctx_table.add_row("back", "Unload cartridge and return")
+            ctx_table.add_row("help", "Show this help")
+            self.rich_console.print(ctx_table)
+            return
+
+        # 5. Global Help (Root — no cartridge, no special context)
+        table = Table(title="onoSendai Command Matrix")
+        table.add_column("Command", style="cyan")
+        table.add_column("Description", style="white")
+        table.add_row("operation [create]", "Manage operations (enter menu or create)")
+        table.add_row("status", "Show visual status tree of current operation")
+        table.add_row("show", "Show current context state (try 'help show')")
+        table.add_row("add <type>", "Add objects to workspace (try 'help add')")
+        table.add_row("edit <path>", "Edit an existing object (try 'help edit')")
+        table.add_row("delete <path>", "Delete an object (try 'help delete')")
+        table.add_row("vars <path>", "Inspect object variables")
+        table.add_row("use [load|unload|list]", "Manage ICE-breaker cartridges")
+        table.add_row("ai <cmd>", "AI management and chat (try 'help ai')")
+        table.add_row("backend", "Enter backend management menu")
+        table.add_row("tools <cmd>", "AI tool management (try 'help tools')")
+        table.add_row("workspace switch <name>", "Switch active operation")
+        table.add_row("back", "Exit current context")
+        table.add_row("exit", "Disconnect from the matrix")
 
         self.rich_console.print(table)
 
@@ -2127,8 +2598,8 @@ class WintermuteConsole:
             self.cmd_delete(" ".join(args))
             return True
 
-        elif cmd == "use" and args:
-            self.cmd_use(args[0])
+        elif cmd == "use":
+            self.cmd_use(*args)
             return True
 
         elif cmd == "set" and len(args) >= 2 and not self.builder_stack:
@@ -2149,6 +2620,17 @@ class WintermuteConsole:
                 self.rich_console.print(
                     f"Available Cartridges: {', '.join(self.available_cartridges)}"
                 )
+            elif args:
+                # show <path> — alias for vars
+                self.cmd_vars(" ".join(args))
+            else:
+                # Bare 'show' — contextual
+                if self.current_cartridge_name:
+                    self.show_options()
+                elif self.context_stack[-1] == "operation":
+                    self.cmd_show_current_context()
+                else:
+                    self.cmd_status()
             return True
 
         elif cmd == "vars" and args:
@@ -2251,7 +2733,7 @@ class WintermuteConsole:
                                     )
                                 )
                                 self.rich_console.print(
-                                    f"[*] Entering {p_type} builder..."
+                                    f"[*] Constructing {p_type} node..."
                                 )
                             else:
                                 self.rich_console.print(
@@ -2270,7 +2752,26 @@ class WintermuteConsole:
                                 )
                             )
                             self.rich_console.print(
-                                "[*] Entering vulnerability builder..."
+                                "[*] Constructing vulnerability node..."
+                            )
+
+                        # Check for cloud nested types (AWS only)
+                        elif (
+                            args[0].lower() in self.CLOUD_NESTED_MAP
+                            and self._is_cloud_builder_aws()
+                        ):
+                            cloud_cls, parent_list = self.CLOUD_NESTED_MAP[
+                                args[0].lower()
+                            ]
+                            self.builder_stack.append(
+                                BuilderContext(
+                                    args[0].lower(),
+                                    cloud_cls,
+                                    parent_list_name=parent_list,
+                                )
+                            )
+                            self.rich_console.print(
+                                f"[*] Constructing {args[0].lower()} node..."
                             )
 
                         else:
@@ -2310,12 +2811,9 @@ class WintermuteConsole:
                 if not handled:
                     handled = await self._dispatch_main_commands(cmd, args)
 
-                if not handled:
-                    if cmd:
-                        self.rich_console.print(f"[red][!] Unknown command: {cmd}[/]")
-                elif current_context != "wintermute":
+                if not handled and cmd:
                     self.rich_console.print(
-                        f"[red]Unknown context: {current_context}[/]"
+                        f"[red][!] ICE rejected: unknown command '{cmd}'[/]"
                     )
 
             except KeyboardInterrupt:
@@ -2326,7 +2824,9 @@ class WintermuteConsole:
                 self.rich_console.print(f"[red][!] Console Error: {e}[/]")
                 logger.exception("REPL Error")
 
-        self.rich_console.print("[bold red]Shutting down Wintermute Console...[/]")
+        self.rich_console.print(
+            "[bold red]Flatline. Disconnecting from the matrix...[/]"
+        )
 
 
 def main() -> None:

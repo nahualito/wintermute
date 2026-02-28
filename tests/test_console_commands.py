@@ -121,20 +121,19 @@ def test_console_prompt_update() -> None:
 
     # Initial state
     tokens = console.get_prompt_tokens()
-    # Should be just [prompt, wintermute, prompt, >] (length 2 because root context adds no extra token)
+    # Root: [prompt, onoSendai, prompt, >] (length 2 because root context adds no extra token)
     assert len(tokens) == 2
-    assert tokens[0][1] == "wintermute "
+    assert tokens[0][1] == "onoSendai"
 
     # Enter Operation
     console.cmd_operation_create("op1")
     # cmd_operation_create now enters context
 
     tokens = console.get_prompt_tokens()
-    # Should contain operation context
-    # [prompt, wintermute, context, operation(op1), prompt, >]
-    context_token = next((t for t in tokens if t[0] == "class:context"), None)
-    assert context_token is not None
-    assert "operation(op1)" in context_token[1]
+    # Should contain operation name in path tokens
+    path_token = next((t for t in tokens if t[0] == "class:path"), None)
+    assert path_token is not None
+    assert "op1" in path_token[1]
 
 
 def test_console_default_backend() -> None:

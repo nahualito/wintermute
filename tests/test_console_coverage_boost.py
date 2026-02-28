@@ -37,10 +37,14 @@ def test_format_value(console: WintermuteConsole) -> None:
 def test_cmd_status_no_op(
     console: WintermuteConsole, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    with patch("wintermute.core.Operation._active", new=None):
+    prev = Operation._active
+    try:
+        Operation._active = None
         console.cmd_status()
         captured = capsys.readouterr()
         assert "NO ACTIVE OPERATION" in captured.out
+    finally:
+        Operation._active = prev
 
 
 def test_cmd_status_with_op(console: WintermuteConsole) -> None:

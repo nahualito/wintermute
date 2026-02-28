@@ -206,3 +206,6 @@ artifacts/*
 
 # No clinerules on git repo
 .clinerules
+
+# No CLAUDE.md
+CLAUDE.md
