@@ -69,6 +69,7 @@ tests = [
 
 [project.scripts]
 wintermute = "wintermute.WintermuteConsole:main"
+wintermute-mcp = "wintermute.WintermuteMCP:main"
 
 [tool.coverage.report]
 exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]
