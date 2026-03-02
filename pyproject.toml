@@ -33,12 +33,13 @@ dependencies = [
   "litellm",
   "mcp",
   "pytest-asyncio",
-  "paramiko",
-  "types-paramiko",
+  "asyncssh",
   "llama-index-core",
   "llama-index-llms-bedrock",
   "llama-index-embeddings-bedrock",
   "llama-index-embeddings-huggingface",
+  "llama-index-vector-stores-qdrant",
+  "qdrant-client",
   "mkdocstrings[python]",
   "mkdocs-gen-files",
   "mkdocs-literate-nav",
@@ -144,7 +145,10 @@ strict = true
 module = [
   "xlsxwriter.*",
   "llama_index.embeddings.bedrock",
-  "llama_index.llms.bedrock"
+  "llama_index.llms.bedrock",
+  "llama_index.vector_stores.qdrant",
+  "qdrant_client",
+  "qdrant_client.*",
 ]
 ignore_missing_imports = true
 

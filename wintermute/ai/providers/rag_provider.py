@@ -37,6 +37,7 @@ from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM
 from llama_index.core.query_engine import BaseQueryEngine
+from llama_index.core.vector_stores.types import BasePydanticVectorStore
 
 from wintermute.ai.provider import LLMProvider, ModelInfo
 from wintermute.ai.types import ChatRequest, ChatResponse, Message
@@ -129,6 +130,9 @@ class LlamaIndexLLMWrapper(LLM):
         return self.stream_complete(prompt, formatted, **kwargs)
 
 
+_DEFAULT_RAG_DESCRIPTION = "Custom RAG knowledge base (No description provided)."
+
+
 class RAGProvider:
     """RAG implementation that conforms to LLMProvider."""
 
@@ -139,8 +143,11 @@ class RAGProvider:
         persist_dir: str,
         embed_provider: Optional[LLMProvider] = None,
         embed_model_id: str = "amazon.titan-embed-text-v2:0",
+        description: str = "",
+        vector_store: BasePydanticVectorStore | None = None,
     ) -> None:
         self._name = name
+        self._description = description or _DEFAULT_RAG_DESCRIPTION
         self.base_provider = base_provider
         self.persist_dir = persist_dir
 
@@ -152,10 +159,19 @@ class RAGProvider:
             )
 
         # Load index
-        storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
-        self.index: VectorStoreIndex = load_index_from_storage(
-            storage_context, embed_model=embed_model
-        )  # type: ignore
+        if vector_store is not None:
+            # External vector store (Qdrant) — index lives in the database
+            self.index: VectorStoreIndex = VectorStoreIndex.from_vector_store(
+                vector_store,
+                embed_model=embed_model,
+            )
+        else:
+            # Local file-based storage (backward compatible)
+            storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
+            self.index = load_index_from_storage(
+                storage_context,
+                embed_model=embed_model,
+            )  # type: ignore
 
         # Create local query engine without global Settings
         self.query_engine: BaseQueryEngine = self.index.as_query_engine(
@@ -166,6 +182,10 @@ class RAGProvider:
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def description(self) -> str:
+        return self._description
 
     def list_models(self) -> list[ModelInfo]:
         return self.base_provider.list_models()

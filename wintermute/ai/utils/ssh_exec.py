@@ -23,88 +23,133 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import os
-from typing import Any, Dict, cast
+from __future__ import annotations
 
-import paramiko
+import os
+
+import asyncssh
 
 from wintermute.ai.json_types import JSONObject
 
-from .tool_factory import register_tools
 
-# Global Cache to keep SSH connections alive between tool calls
-_SSH_CLIENTS: Dict[str, Any] = {}
+def _build_connect_kwargs(
+    target_alias: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+) -> dict[str, object]:
+    """Build the keyword arguments for ``asyncssh.connect()``.
+
+    When a *password* is supplied the SSH agent and local key files are
+    explicitly disabled so that asyncssh performs **pure password /
+    keyboard-interactive authentication**.  This avoids two pitfalls:
+
+    * ``client_keys=[]`` or ``client_keys=()`` are falsy / equal to the
+      default sentinel, so asyncssh still scans ``~/.ssh/`` and attempts to
+      decrypt passphrase-protected keys **using the password string** as
+      the passphrase — which silently poisons the auth state.
+    * A running SSH agent may offer keys that exhaust
+      ``MaxAuthTries`` before password auth is attempted.
+
+    Setting ``client_keys=None`` makes asyncssh assign
+    ``self.client_keys = None`` (no keys loaded at all).
+
+    When **no** password is given, all defaults are preserved so that
+    ``~/.ssh/config``, the agent, and local keys work normally.
+    """
+    kwargs: dict[str, object] = {"host": target_alias, "known_hosts": None}
+    if username:
+        kwargs["username"] = username
+    if password:
+        kwargs["password"] = password
+        # Prevent asyncssh from loading ~/.ssh/ keys or contacting the agent.
+        # MUST be None — [] and () still trigger default key loading.
+        kwargs["client_keys"] = None
+        kwargs["agent_path"] = None
+    if port is not None:
+        kwargs["port"] = port
+    return kwargs
 
 
-def _get_client(hostname: str, username: str, key_path: str) -> Any:
-    client_key = f"{username}@{hostname}"
-    # Reuse connection if valid
-    if client_key in _SSH_CLIENTS:
-        client = _SSH_CLIENTS[client_key]
-        if client.get_transport() and client.get_transport().is_active():
-            return client
+async def run_command_async(
+    target_alias: str,
+    command: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+) -> JSONObject:
+    """Execute a command on a remote host via asyncssh.
 
-    # Otherwise connect
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(hostname, username=username, key_filename=key_path, timeout=10)
-    _SSH_CLIENTS[client_key] = client
-    return client
-
-
-def run_command_handler(args: JSONObject) -> JSONObject:
-    """Executes a command (e.g., 'tar -xvf tool.tgz')."""
+    Leverages ``~/.ssh/config`` for host aliases, proxy jumps, and key
+    management when *target_alias* matches a configured host entry.
+    """
+    kwargs = _build_connect_kwargs(target_alias, username, password, port)
     try:
-        host = cast(str, args.get("host"))
-        user = cast(str, args.get("username"))
-        # Handle optional password safely
-        password = cast(str, args.get("password")) if args.get("password") else ""
-
-        client = _get_client(host, user, password)
-
-        # For exec_command
-        command = cast(str, args.get("command"))
-        stdin, stdout, stderr = client.exec_command(command)
-        return {
-            "stdout": stdout.read().decode("utf-8", errors="ignore"),
-            "stderr": stderr.read().decode("utf-8", errors="ignore"),
-            "exit_code": stdout.channel.recv_exit_status(),
-        }
-    except Exception as e:
+        async with asyncssh.connect(**kwargs) as conn:
+            result = await conn.run(command, check=False)
+            exit_status: int = (
+                result.exit_status if result.exit_status is not None else -1
+            )
+            if exit_status != 0:
+                return {
+                    "exit_code": exit_status,
+                    "stderr": result.stderr or "",
+                    "stdout": result.stdout or "",
+                }
+            return {
+                "exit_code": 0,
+                "stdout": result.stdout or "",
+            }
+    except (asyncssh.Error, OSError) as e:
         return {"error": str(e)}
 
 
-def upload_file_handler(args: JSONObject) -> JSONObject:
-    """
-    Uploads a LOCAL file (binary/tgz) to the REMOTE server.
-    The 'local_path' comes from the RAG; the file must exist on your machine.
-    """
-    local_path = cast(str, args.get("local_path"))
-    remote_path = cast(str, args.get("remote_path"))
+async def upload_file_async(
+    target_alias: str,
+    local_path: str,
+    remote_path: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+) -> JSONObject:
+    """Upload a local file to a remote host via SFTP over asyncssh.
 
+    Leverages ``~/.ssh/config`` for host aliases, proxy jumps, and key
+    management when *target_alias* matches a configured host entry.
+    """
     if not os.path.exists(local_path):
         return {
             "error": f"Local file not found: {local_path}. Check your tools directory."
         }
 
+    kwargs = _build_connect_kwargs(target_alias, username, password, port)
     try:
-        host = cast(str, args.get("host"))
-        user = cast(str, args.get("username"))
-        # Handle optional password safely
-        password = cast(str, args.get("password")) if args.get("password") else ""
-
-        client = _get_client(host, user, password)
-        sftp = client.open_sftp()
-
-        # This handles binaries, TGZs, everything.
-        sftp.put(local_path, remote_path)
-        sftp.close()
-
+        async with asyncssh.connect(**kwargs) as conn:
+            async with conn.start_sftp_client() as sftp:
+                await sftp.put(local_path, remote_path)
         return {"result": f"Successfully uploaded {local_path} to {remote_path}"}
-    except Exception as e:
+    except (asyncssh.Error, OSError) as e:
         return {"error": str(e)}
 
 
-# --- Tool Registration ---
+async def download_file_async(
+    target_alias: str,
+    remote_path: str,
+    local_path: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+) -> JSONObject:
+    """Download a file from a remote host via SFTP over asyncssh.
 
-register_tools([run_command_handler, upload_file_handler])
+    Leverages ``~/.ssh/config`` for host aliases, proxy jumps, and key
+    management when *target_alias* matches a configured host entry.
+    """
+    kwargs = _build_connect_kwargs(target_alias, username, password, port)
+    try:
+        async with asyncssh.connect(**kwargs) as conn:
+            async with conn.start_sftp_client() as sftp:
+                await sftp.get(remote_path, local_path)
+        return {"result": f"Successfully downloaded {remote_path} to {local_path}"}
+    except (asyncssh.Error, OSError) as e:
+        return {"error": str(e)}

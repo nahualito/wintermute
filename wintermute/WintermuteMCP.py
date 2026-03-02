@@ -361,12 +361,11 @@ async def configure_ai_router() -> str:
     global _ai_router  # noqa: PLW0603
     try:
         _ai_router = init_router()
-        providers = llms.providers()
         return json.dumps(
             {
                 "status": "ok",
                 "default_provider": _ai_router.default_provider,
-                "available_providers": providers,
+                "available_providers": llms.get_provider_descriptions(),
             },
             indent=2,
         )
@@ -2341,75 +2340,113 @@ async def execute_depthcharge_memory_dump(
 
 @mcp.tool()
 async def run_ssh_command(
-    host: str,
-    username: str,
+    target_alias: str,
     command: str,
+    username: str | None = None,
     password: str | None = None,
+    port: int | None = None,
 ) -> str:
     """Execute a command on a remote host via SSH.
 
-    Uses Paramiko for SSH transport.  Results are returned as stdout/stderr.
+    Uses asyncssh and the host machine's ``~/.ssh/config`` for proxy jumping,
+    key management, and host aliases.
 
     Args:
-        host: Target hostname or IP address.
-        username: SSH username.
-        command: Shell command to execute.
+        target_alias: SSH host alias from ~/.ssh/config, or hostname/IP.
+        command: Shell command to execute on the remote host.
+        username: SSH username (optional — inferred from ssh config).
         password: SSH password (optional — falls back to key-based auth).
+        port: SSH port (optional — defaults to ssh config or 22).
 
     Returns:
         JSON with ``stdout``, ``stderr``, and ``exit_code``.
     """
-    try:
-        from wintermute.ai.utils.ssh_exec import run_command_handler
+    from wintermute.ai.utils.ssh_exec import run_command_async
 
-        args: dict[str, Any] = {
-            "host": host,
-            "username": username,
-            "command": command,
-        }
-        if password:
-            args["password"] = password
-        result = run_command_handler(args)
-        return json.dumps(result, indent=2, default=str)
-    except Exception as e:
-        return f"SSH command failed: {e}"
+    result = await run_command_async(
+        target_alias=target_alias,
+        command=command,
+        username=username,
+        password=password,
+        port=port,
+    )
+    return json.dumps(result, indent=2, default=str)
 
 
 @mcp.tool()
 async def upload_file_ssh(
-    host: str,
-    username: str,
+    target_alias: str,
     local_path: str,
     remote_path: str,
+    username: str | None = None,
     password: str | None = None,
+    port: int | None = None,
 ) -> str:
     """Upload a file to a remote host via SFTP/SSH.
 
+    Uses asyncssh and the host machine's ``~/.ssh/config`` for proxy jumping,
+    key management, and host aliases.
+
     Args:
-        host: Target hostname or IP address.
-        username: SSH username.
+        target_alias: SSH host alias from ~/.ssh/config, or hostname/IP.
         local_path: Local file path to upload.
         remote_path: Destination path on the remote host.
-        password: SSH password (optional).
+        username: SSH username (optional — inferred from ssh config).
+        password: SSH password (optional — falls back to key-based auth).
+        port: SSH port (optional — defaults to ssh config or 22).
 
     Returns:
         Confirmation or error message.
     """
-    try:
-        from wintermute.ai.utils.ssh_exec import upload_file_handler
+    from wintermute.ai.utils.ssh_exec import upload_file_async
 
-        args: dict[str, Any] = {
-            "host": host,
-            "username": username,
-            "local_path": local_path,
-            "remote_path": remote_path,
-        }
-        if password:
-            args["password"] = password
-        result = upload_file_handler(args)
-        return json.dumps(result, indent=2, default=str)
-    except Exception as e:
-        return f"SFTP upload failed: {e}"
+    result = await upload_file_async(
+        target_alias=target_alias,
+        local_path=local_path,
+        remote_path=remote_path,
+        username=username,
+        password=password,
+        port=port,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def download_file_ssh(
+    target_alias: str,
+    remote_path: str,
+    local_path: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+) -> str:
+    """Download a file from a remote host via SFTP/SSH.
+
+    Uses asyncssh and the host machine's ``~/.ssh/config`` for proxy jumping,
+    key management, and host aliases.
+
+    Args:
+        target_alias: SSH host alias from ~/.ssh/config, or hostname/IP.
+        remote_path: File path on the remote host to download.
+        local_path: Local destination path for the downloaded file.
+        username: SSH username (optional — inferred from ssh config).
+        password: SSH password (optional — falls back to key-based auth).
+        port: SSH port (optional — defaults to ssh config or 22).
+
+    Returns:
+        Confirmation or error message.
+    """
+    from wintermute.ai.utils.ssh_exec import download_file_async
+
+    result = await download_file_async(
+        target_alias=target_alias,
+        remote_path=remote_path,
+        local_path=local_path,
+        username=username,
+        password=password,
+        port=port,
+    )
+    return json.dumps(result, indent=2, default=str)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

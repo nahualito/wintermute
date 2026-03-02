@@ -113,6 +113,14 @@
     "Groq",
     "Metaclass",
     "datasheets",
-    "Pylint"
+    "Pylint",
+    "Qdrant",
+    "Metasploit",
+    "Dataclasses",
+    "Zigbee",
+    "ipynb",
+    "embedder",
+    "readpublic",
+    "BAAI"
   ]
 }

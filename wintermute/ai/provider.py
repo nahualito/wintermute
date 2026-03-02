@@ -44,11 +44,16 @@ class ModelInfo:
     supports_vision: bool = False
 
 
+_BASE_LLM_DESCRIPTION = "Standard base foundation model. No specialized RAG knowledge."
+
+
 class LLMProvider(Protocol):
     """Protocol for LLM Providers."""
 
     @property
     def name(self) -> str: ...
+    @property
+    def description(self) -> str: ...
     def list_models(self) -> list[ModelInfo]: ...
     def chat(self, req: ChatRequest) -> ChatResponse: ...
     def embed(
@@ -71,6 +76,10 @@ class LLMRegistry:
 
     def providers(self) -> list[str]:
         return list(self._providers.keys())
+
+    def get_provider_descriptions(self) -> dict[str, str]:
+        """Return a mapping of provider names to their descriptions."""
+        return {name: p.description for name, p in self._providers.items()}
 
 
 llms = LLMRegistry()

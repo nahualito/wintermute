@@ -1,0 +1,12 @@
+{
+  "rag_id": "red_team_manuals_v1",
+  "description": "Embedded systems and red team exploit manuals.",
+  "base_provider_id": "bedrock",
+  "embedding_model": "BAAI/bge-small-en-v1.5",
+  "vector_store_type": "qdrant",
+  "qdrant_url": "http://localhost:6333",
+  "db_path": "./storage/red_team_manuals",
+  "qdrant_collection_name": "example_kb",
+  "document_types": ["pdf", "markdown", "python"],
+  "created_at": "2026-03-01T12:00:00Z"
+}

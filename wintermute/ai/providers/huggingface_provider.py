@@ -54,6 +54,10 @@ class HuggingFaceProvider:
     def name(self) -> str:
         return self._name
 
+    @property
+    def description(self) -> str:
+        return "Local HuggingFace sentence-transformers for embeddings only."
+
     def list_models(self) -> list[ModelInfo]:
         """Returns a list of common embedding models supported."""
         return [

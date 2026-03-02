@@ -50,6 +50,10 @@ class GroqProvider(LLMProvider):
     def name(self) -> str:
         return self._name
 
+    @property
+    def description(self) -> str:
+        return "Inference routing via Groq Cloud (Llama, Mixtral). No specialized RAG knowledge."
+
     def list_models(self) -> list[ModelInfo]:
         """List available Groq models."""
         return [

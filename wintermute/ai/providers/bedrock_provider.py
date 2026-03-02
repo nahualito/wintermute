@@ -55,6 +55,10 @@ class BedrockProvider(LLMProvider):
     def name(self) -> str:
         return self._name
 
+    @property
+    def description(self) -> str:
+        return "Neural routing via Amazon Bedrock (Claude, Llama, DeepSeek). No specialized RAG knowledge."
+
     def list_models(self) -> list[ModelInfo]:
         return [
             ModelInfo(

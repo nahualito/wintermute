@@ -50,6 +50,10 @@ class OpenAIProvider(LLMProvider):
     def name(self) -> str:
         return self._name
 
+    @property
+    def description(self) -> str:
+        return "Neural routing via OpenAI (GPT-4o, o1, GPT-4-mini). No specialized RAG knowledge."
+
     def list_models(self) -> list[ModelInfo]:
         """List available OpenAI models."""
         return [
