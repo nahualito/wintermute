@@ -20,9 +20,9 @@
 **PRs welcome!**
 
 - **Consider starting a discussion to see if there's interest in what you want to do.**
-- **Submit PRs from feature branches on forks to the `develop` branch.**
+- **Submit PRs from feature branches on forks to the `main` branch.**
 - **Ensure PRs pass all CI checks.**
-- **Maintain test coverage at 100%.**
+- **Maintain test coverage at 70% minimum.**
 
 ## Git
 
@@ -116,19 +116,14 @@ Spell check is performed with [CSpell](https://cspell.org/). The CSpell command 
 
 ## Maintainers
 
-- **The default branch is `develop`.**
-- **PRs should be merged into `develop`.** Head branches are deleted automatically after PRs are merged.
-- **The only merges to `main` should be fast-forward merges from `develop`.**
-- **Branch protection is enabled on `develop` and `main`.**
-  - `develop`:
-    - Require signed commits
-    - Include administrators
-    - Allow force pushes
+- **The default branch is `main`.**
+- **PRs should be merged into `main`.** Head branches are deleted automatically after PRs are merged.
+- **Branch protection is enabled on `main`.**
   - `main`:
     - Require signed commits
     - Include administrators
     - Do not allow force pushes
-    - Require status checks to pass before merging (commits must have previously been pushed to `develop` and passed all checks)
+    - Require status checks to pass before merging
 - **To create a release:**
   - Bump the version number in `__version__` with `hatch version` and commit the changes to `develop`.
     - Follow [SemVer](https://semver.org/) guidelines when choosing a version number. Note that [PEP 440](https://peps.python.org/pep-0440/) Python version specifiers and SemVer version specifiers differ, particularly with regard to specifying prereleases. Use syntax compatible with both.

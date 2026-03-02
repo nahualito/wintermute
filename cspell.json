@@ -121,6 +121,8 @@
     "ipynb",
     "embedder",
     "readpublic",
-    "BAAI"
+    "BAAI",
+    "docstrings",
+    "mkdocstrings"
   ]
 }
