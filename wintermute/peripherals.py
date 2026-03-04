@@ -36,7 +36,7 @@ import ipaddress
 import logging
 import struct
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from .basemodels import Peripheral, PeripheralType
 from .findings import Vulnerability
@@ -372,8 +372,8 @@ class TPM_register(Enum):
     TPM_REG_NONE = 0xFFFF
 
 
-class TPM_interposer_commands(Enum):
-    """TPM Command ordinals that the interposer is aware"""
+class TPM12_Commands(Enum):
+    """TPM 1.2 command ordinals used by the hardware interposer."""
 
     TPM_ORD_OIAP = 0x0A
     TPM_ORD_OSAP = 0x0B
@@ -399,8 +399,12 @@ class TPM_interposer_commands(Enum):
     TSC_ORD_PhysicalPresence = 0x4000000A
 
 
+# Backwards-compatible alias
+TPM_interposer_commands = TPM12_Commands
+
+
 class TPM(Peripheral):
-    """Class that defines a TPM peripheral
+    """Class that defines a TPM peripheral with version-aware payload builders.
 
     Examples:
         >>> pins = {
@@ -432,6 +436,7 @@ class TPM(Peripheral):
         name (str): Name of the peripheral
         pins (Dict[Any, Any]): Dictionary of pin names to their values
         pType (PeripheralType): Type of the peripheral
+        version (Literal["1.2", "2.0"]): TPM specification version targeted
     """
 
     def __init__(
@@ -440,20 +445,36 @@ class TPM(Peripheral):
         name: str = "",
         pins: Dict[Any, Any] = {},
         pType: PeripheralType = PeripheralType.TPM,
+        version: Literal["1.2", "2.0"] = "2.0",
         vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
     ) -> None:
-        """Initialize TPM peripheral with pin mappings and type.
+        """Initialize TPM peripheral with pin mappings, version, and type.
 
         Args:
             device_path (str): Path to the TPM device file.
             name (str): Name of the TPM peripheral.
             pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
             pType (PeripheralType): Type of the peripheral, defaults to PeripheralType.TPM.
+            version (Literal["1.2", "2.0"]): TPM spec version, defaults to "2.0".
+            vulnerabilities: Optional list of known vulnerabilities.
         """
+        self.version: Literal["1.2", "2.0"] = version
         super().__init__(
             device_path, name, pins, pType, vulnerabilities=vulnerabilities
         )
-        log.info(f"Initialized TPM peripheral {name} at {device_path}")
+        log.info(f"Initialized TPM {version} peripheral {name} at {device_path}")
+
+    def _require_version(self, required: str) -> None:
+        """Raise NotImplementedError if the TPM version does not match."""
+        if self.version != required:
+            raise NotImplementedError(
+                f"This operation requires TPM {required}, "
+                f"but this peripheral is configured for TPM {self.version}"
+            )
+
+    # -------------------------------------------------
+    # Common header helpers (version-agnostic framing)
+    # -------------------------------------------------
 
     def _tpm_input_header(self, tag: int, len: int, code: int) -> bytes:
         """10 byte header that will prepend every command sent from the host to the TPM"""
@@ -464,41 +485,86 @@ class TPM(Peripheral):
         return struct.pack(">HII", tag, len, code)
 
     # -------------------------------------------------
-    # PCR Read
+    # TPM 1.2 payload builders
+    # -------------------------------------------------
+
+    def _tpm12_pcr_read_req_body(self, pcr_index: int = 0) -> bytes:
+        """Build a TPM 1.2 PCR_Read request body (SHA-1 / 20-byte digests)."""
+        self._require_version("1.2")
+        return struct.pack(">I", pcr_index)
+
+    def _tpm12_pcr_read_resp_body(self, out_digest: bytes) -> bytes:
+        """Parse helper for a TPM 1.2 PCR_Read response body."""
+        self._require_version("1.2")
+        return struct.pack(">20s", out_digest)
+
+    def _tpm12_pcr_extend_req_body(self, pcr_index: int, in_digest: bytes) -> bytes:
+        """Build a TPM 1.2 PCR_Extend request body."""
+        self._require_version("1.2")
+        return struct.pack(">I20s", pcr_index, in_digest)
+
+    def _tpm12_pcr_extend_resp_body(self, out_digest: bytes) -> bytes:
+        """Parse helper for a TPM 1.2 PCR_Extend response body."""
+        self._require_version("1.2")
+        return struct.pack(">20s", out_digest)
+
+    def _tpm12_get_rnd_req_body(self, num_bytes: int) -> bytes:
+        """Build a TPM 1.2 GetRandom request body."""
+        self._require_version("1.2")
+        return struct.pack(">I", num_bytes)
+
+    def _tpm12_get_rnd_resp_body(
+        self, random_bytes_size: int, random_bytes: bytes
+    ) -> bytes:
+        """Parse helper for a TPM 1.2 GetRandom response body."""
+        self._require_version("1.2")
+        return struct.pack(">I128s", random_bytes_size, random_bytes)
+
+    def _tpm12_op_auth_req_body(self, operator_auth: bytes) -> bytes:
+        """Build a TPM 1.2 SetOperatorAuth request body."""
+        self._require_version("1.2")
+        return struct.pack(">20s", operator_auth)
+
+    # -------------------------------------------------
+    # Version-dispatching wrappers (backwards compat)
     # -------------------------------------------------
 
     def _tpm_pcr_read_req_body(self, pcr_index: int = 0) -> bytes:
-        return struct.pack(">I", pcr_index)
+        if self.version == "2.0":
+            raise NotImplementedError(
+                "TPM 2.0 PCR_Read uses the tpm20 cartridge; "
+                "these helpers target TPM 1.2 wire format only"
+            )
+        return self._tpm12_pcr_read_req_body(pcr_index)
 
     def _tpm_pcr_read_resp_body(self, out_digest: bytes) -> bytes:
-        return struct.pack(">20s", out_digest)
-
-    # -------------------------------------------------
-    # PCR Extend
-    # -------------------------------------------------
+        if self.version == "2.0":
+            raise NotImplementedError("TPM 2.0 PCR_Read uses the tpm20 cartridge")
+        return self._tpm12_pcr_read_resp_body(out_digest)
 
     def _tpm_pcr_extend_req_body(self, pcr_index: int, in_digest: bytes) -> bytes:
-        """PCR Extend"""
-        return struct.pack(">I20s", pcr_index, in_digest)
+        if self.version == "2.0":
+            raise NotImplementedError("TPM 2.0 PCR_Extend uses the tpm20 cartridge")
+        return self._tpm12_pcr_extend_req_body(pcr_index, in_digest)
 
     def _tpm_pcr_extend_resp_body(self, out_digest: bytes) -> bytes:
-        return struct.pack(">20s", out_digest)
-
-    # -------------------------------------------------
-    # Get Random
-    # -------------------------------------------------
+        if self.version == "2.0":
+            raise NotImplementedError("TPM 2.0 PCR_Extend uses the tpm20 cartridge")
+        return self._tpm12_pcr_extend_resp_body(out_digest)
 
     def _tpm_get_rnd_req_body(self, num_bytes: int) -> bytes:
-        return struct.pack(">I", num_bytes)
+        if self.version == "2.0":
+            raise NotImplementedError("TPM 2.0 GetRandom uses the tpm20 cartridge")
+        return self._tpm12_get_rnd_req_body(num_bytes)
 
     def _tpm_get_rnd_resp_body(
         self, random_bytes_size: int, random_bytes: bytes
     ) -> bytes:
-        return struct.pack(">I128s", random_bytes_size, random_bytes)
-
-    # -------------------------------------------------
-    # Set Operator Auth
-    # -------------------------------------------------
+        if self.version == "2.0":
+            raise NotImplementedError("TPM 2.0 GetRandom uses the tpm20 cartridge")
+        return self._tpm12_get_rnd_resp_body(random_bytes_size, random_bytes)
 
     def _tpm_op_auth_req_body(self, operator_auth: bytes) -> bytes:
-        return struct.pack(">20s", operator_auth)
+        if self.version == "2.0":
+            raise NotImplementedError("TPM 2.0 auth uses the tpm20 cartridge")
+        return self._tpm12_op_auth_req_body(operator_auth)

@@ -69,7 +69,7 @@ def test_tpm_packet_generation() -> None:
 
 
 def test_tpm_extend_body() -> None:
-    tpm = TPM(device_path="/dev/tpm0", name="tpm0")
+    tpm = TPM(device_path="/dev/tpm0", name="tpm0", version="1.2")
     dummy_digest = b"A" * 20
     pcr_index = 5
 

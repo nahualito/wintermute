@@ -66,6 +66,14 @@ def test_tpm_constructs(TPM: Type[Any]) -> None:
         pins={"mosi": "P1", "miso": "P2", "sclk": "P3", "gnd": "GND"},
     )
     assert getattr(tpm, "name") == "tpm1"
+    assert tpm.version == "2.0"  # default version
+
+
+def test_tpm_version_attribute(TPM: Type[Any]) -> None:
+    tpm12 = TPM(device_path="/dev/tpm0", version="1.2")
+    assert tpm12.version == "1.2"
+    tpm20 = TPM(device_path="/dev/tpm0", version="2.0")
+    assert tpm20.version == "2.0"
 
 
 def test_tpm_input_header(TPM: Type[Any]) -> None:
@@ -84,10 +92,10 @@ def test_tpm_output_header(TPM: Type[Any]) -> None:
     assert packed == struct.pack(">HII", 0x00C4, 24, 0x00000000)
 
 
-def test_tpm_pcr_read_bodies(TPM: type) -> None:
+def test_tpm12_pcr_read_bodies(TPM: type) -> None:
     import struct
 
-    tpm = TPM(device_path="/dev/tpm0")
+    tpm = TPM(device_path="/dev/tpm0", version="1.2")
     req = tpm._tpm_pcr_read_req_body(pcr_index=7)
     assert req == struct.pack(">I", 7)
 
@@ -100,8 +108,8 @@ def test_tpm_pcr_read_bodies(TPM: type) -> None:
     assert len(resp) == 20
 
 
-def test_tpm_pcr_extend_bodies(TPM: Type[Any]) -> None:
-    tpm = TPM(device_path="/dev/tpm0")
+def test_tpm12_pcr_extend_bodies(TPM: Type[Any]) -> None:
+    tpm = TPM(device_path="/dev/tpm0", version="1.2")
     # request: pcrIndex (I) + inDigest (20s)
     req = tpm._tpm_pcr_extend_req_body(pcr_index=3, in_digest=b"\x11" * 20)
     assert req == struct.pack(">I20s", 3, b"\x11" * 20)
@@ -111,8 +119,8 @@ def test_tpm_pcr_extend_bodies(TPM: Type[Any]) -> None:
     assert resp == struct.pack(">20s", b"\x22" * 20)
 
 
-def test_tpm_random_and_auth_bodies(TPM: Type[Any]) -> None:
-    tpm = TPM(device_path="/dev/tpm0")
+def test_tpm12_random_and_auth_bodies(TPM: Type[Any]) -> None:
+    tpm = TPM(device_path="/dev/tpm0", version="1.2")
     # get random: size (I)
     req_rnd = tpm._tpm_get_rnd_req_body(num_bytes=16)
     assert req_rnd == struct.pack(">I", 16)
@@ -126,3 +134,18 @@ def test_tpm_random_and_auth_bodies(TPM: Type[Any]) -> None:
     auth = b"\x44" * 20
     req_auth = tpm._tpm_op_auth_req_body(operator_auth=auth)
     assert req_auth == struct.pack(">20s", auth)
+
+
+def test_tpm20_payload_helpers_raise(TPM: Type[Any]) -> None:
+    """TPM 2.0 instances should raise NotImplementedError on 1.2 helpers."""
+    tpm = TPM(device_path="/dev/tpm0", version="2.0")
+    import pytest
+
+    with pytest.raises(NotImplementedError):
+        tpm._tpm_pcr_read_req_body(0)
+    with pytest.raises(NotImplementedError):
+        tpm._tpm_pcr_extend_req_body(0, b"\x00" * 20)
+    with pytest.raises(NotImplementedError):
+        tpm._tpm_get_rnd_req_body(16)
+    with pytest.raises(NotImplementedError):
+        tpm._tpm_op_auth_req_body(b"\x00" * 20)
