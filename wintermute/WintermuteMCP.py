@@ -2449,6 +2449,188 @@ async def download_file_ssh(
     return json.dumps(result, indent=2, default=str)
 
 
+# --- Persistent SSH Sessions ---
+
+
+@mcp.tool()
+async def open_ssh_session(
+    target_alias: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+) -> str:
+    """Open a persistent SSH session for multi-command workflows.
+
+    Use this instead of ``run_ssh_command`` when you need to run many commands
+    on the same target, launch background fuzzers or long-running tools, or
+    preserve shell state across calls.  The session stays open until you
+    explicitly call ``close_ssh_session``.
+
+    Args:
+        target_alias: SSH host alias from ~/.ssh/config, or hostname/IP.
+        username: SSH username (optional — inferred from ssh config).
+        password: SSH password (optional — falls back to key-based auth).
+        port: SSH port (optional — defaults to ssh config or 22).
+
+    Returns:
+        A session_id string for use with the other ``*_ssh_session*`` tools.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session = SSHSession(
+            target_alias=target_alias,
+            username=username,
+            password=password,
+            port=port,
+        )
+        await session.connect()
+        session_id = registry.store(session, "ssh_session", target_alias, prefix="ssh")
+        return json.dumps({"session_id": session_id}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Failed to open SSH session: {e}"}, indent=2)
+
+
+@mcp.tool()
+async def run_ssh_session_command(session_id: str, command: str) -> str:
+    """Execute a command on a persistent SSH session.
+
+    Args:
+        session_id: ID returned by ``open_ssh_session``.
+        command: Shell command to execute.
+
+    Returns:
+        JSON with ``exit_code``, ``stdout``, and ``stderr``.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session: SSHSession = _require(session_id, SSHSession, "SSHSession")
+        result = await session.run(command)
+        return json.dumps(result, indent=2, default=str)
+    except (ValueError, TypeError) as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.tool()
+async def run_ssh_session_background(session_id: str, command: str) -> str:
+    """Launch a background command on a persistent SSH session.
+
+    Use this for fuzzers, long scanners, or any tool that may run for minutes
+    or hours.  Poll with ``poll_ssh_background_job`` to check completion.
+
+    Args:
+        session_id: ID returned by ``open_ssh_session``.
+        command: Shell command to launch in the background via nohup.
+
+    Returns:
+        JSON with the ``job_id`` to use when polling.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session: SSHSession = _require(session_id, SSHSession, "SSHSession")
+        job_id = await session.run_background(command)
+        return json.dumps({"job_id": job_id}, indent=2)
+    except (ValueError, TypeError) as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.tool()
+async def poll_ssh_background_job(session_id: str, job_id: str) -> str:
+    """Poll the status of a background job on a persistent SSH session.
+
+    Do NOT block in a loop — call this tool, read the status, and if still
+    ``"running"`` wait before calling again.  This is the correct pattern for
+    long-running tools.
+
+    Args:
+        session_id: ID returned by ``open_ssh_session``.
+        job_id: ID returned by ``run_ssh_session_background``.
+
+    Returns:
+        JSON with ``status`` (``"running"``, ``"done"``, or ``"error"``),
+        and ``exit_code``, ``stdout``, ``stderr`` when finished.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session: SSHSession = _require(session_id, SSHSession, "SSHSession")
+        result = await session.poll_job(job_id)
+        return json.dumps(result, indent=2, default=str)
+    except (ValueError, TypeError) as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.tool()
+async def close_ssh_session(session_id: str) -> str:
+    """Close a persistent SSH session and release its resources.
+
+    Args:
+        session_id: ID returned by ``open_ssh_session``.
+
+    Returns:
+        Confirmation message.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session: SSHSession = _require(session_id, SSHSession, "SSHSession")
+        await session.close()
+        registry.delete(session_id)
+        return json.dumps({"result": f"Session {session_id} closed."}, indent=2)
+    except (ValueError, TypeError) as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.tool()
+async def upload_file_ssh_session(
+    session_id: str, local_path: str, remote_path: str
+) -> str:
+    """Upload a file via SFTP on a persistent SSH session.
+
+    Args:
+        session_id: ID returned by ``open_ssh_session``.
+        local_path: Local file path to upload.
+        remote_path: Destination path on the remote host.
+
+    Returns:
+        Confirmation or error message.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session: SSHSession = _require(session_id, SSHSession, "SSHSession")
+        result = await session.upload(local_path, remote_path)
+        return json.dumps(result, indent=2, default=str)
+    except (ValueError, TypeError) as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.tool()
+async def download_file_ssh_session(
+    session_id: str, remote_path: str, local_path: str
+) -> str:
+    """Download a file via SFTP on a persistent SSH session.
+
+    Args:
+        session_id: ID returned by ``open_ssh_session``.
+        remote_path: File path on the remote host to download.
+        local_path: Local destination path for the downloaded file.
+
+    Returns:
+        Confirmation or error message.
+    """
+    from wintermute.ai.utils.ssh_exec import SSHSession
+
+    try:
+        session: SSHSession = _require(session_id, SSHSession, "SSHSession")
+        result = await session.download(remote_path, local_path)
+        return json.dumps(result, indent=2, default=str)
+    except (ValueError, TypeError) as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
