@@ -1,0 +1,59 @@
+<svg width="600" height="600" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="600" height="600" fill="#2B2B2B" />
+
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#FFB000" stroke-width="0.5" opacity="0.1"/>
+    </pattern>
+  </defs>
+  <rect width="600" height="600" fill="url(#grid)" />
+
+  <g stroke="#FFB000" stroke-width="1" opacity="0.4">
+    <line x1="300" y1="200" x2="150" y2="100" />
+    <line x1="300" y1="200" x2="450" y2="120" />
+    <line x1="300" y1="400" x2="180" y2="500" />
+    <line x1="300" y1="300" x2="520" y2="350" />
+  </g>
+  
+  <g fill="#2B2B2B" stroke="#FFB000" stroke-width="2">
+    <rect x="140" y="90" width="20" height="20" /> <circle cx="450" cy="120" r="8" />           <polygon points="180,490 190,510 170,510" /> <rect x="510" y="340" width="20" height="20" /> 
+  </g>
+
+  <g transform="translate(300, 250)">
+    <circle r="120" fill="#2B2B2B" stroke="#F0F0F0" stroke-width="4" />
+    
+    <circle r="105" fill="none" stroke="#333" stroke-width="20" />
+    <circle r="90" fill="none" stroke="#111" stroke-width="2" />
+    
+    <path d="M-60 0 A 60 60 0 0 1 60 0 L 0 100 Z" fill="#2B2B2B" stroke="#FFB000" stroke-width="2" opacity="0.8" />
+    <circle r="40" fill="#FFB000" opacity="0.2" />
+    <circle r="20" fill="#FFB000" />
+    
+    <circle cx="-30" cy="-30" r="10" fill="#FFFFFF" opacity="0.5" />
+  </g>
+
+  <g transform="translate(300, 250)">
+    <path d="M 60 60 L 120 120 L 250 120 L 250 160" fill="none" stroke="#F0F0F0" stroke-width="12" stroke-linecap="square" />
+    
+    <g fill="#2B2B2B">
+      <rect x="130" y="114" width="8" height="12" />
+      <rect x="150" y="114" width="8" height="12" />
+      <rect x="190" y="114" width="8" height="12" />
+    </g>
+
+    <rect x="210" y="110" width="14" height="20" fill="#FF3333" />
+    <path d="M 210 110 L 225 100" stroke="#FF3333" stroke-width="2" />
+    <text x="233" y="98" fill="#FF3333" font-family="monospace" font-size="12" font-weight="bold">ERR_VULN</text>
+  </g>
+
+  <g transform="translate(300, 520)" text-anchor="middle">
+    <text y="0" fill="#F0F0F0" font-family="'Eurostile', 'Microgramma', 'Arial Black', sans-serif" font-size="64" letter-spacing="4">
+      W<tspan fill="#FFB000">|</tspan>NTERMUTE
+    </text>
+    
+    <text y="35" fill="#FFB000" font-family="'OCR-A', 'Courier New', monospace" font-size="16" letter-spacing="2" opacity="0.8">
+      OPERATION // RUNTIME // KERNEL
+    </text>
+  </g>
+  
+</svg>
