@@ -64,6 +64,8 @@ import json
 import logging
 import re
 import sys
+import io
+from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -2283,15 +2285,24 @@ async def execute_depthcharge_catalog(
     Returns:
         JSON summary of discovered commands and danger analysis.
     """
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
     from wintermute.backends.depthcharge import DepthchargePeripheralAgent
     from wintermute.basemodels import Peripheral
 
     periph: Peripheral = _require(peripheral_id, Peripheral, "Peripheral")
     try:
-        agent = DepthchargePeripheralAgent(peripheral=periph)  # type: ignore[arg-type]
-        result = agent.catalog_commands_and_flag(
-            addVulns=add_vulns if add_vulns is not None else True
-        )
+        # Create a memory buffer to swallow the rogue print statements
+        f = io.StringIO()
+        
+        # Everything inside this 'with' block has its terminal output silenced
+        with redirect_stdout(f), redirect_stderr(f):
+            agent = DepthchargePeripheralAgent(peripheral=periph)  # type: ignore[arg-type]
+            result = agent.catalog_commands_and_flag(
+                addVulns=add_vulns if add_vulns is not None else True
+            )
+            
+        # Once we exit the 'with' block, standard output is restored safely!
         return json.dumps(result, indent=2, default=str)
     except Exception as e:
         return f"Depthcharge catalog failed: {e}"

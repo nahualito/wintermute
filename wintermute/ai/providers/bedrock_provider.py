@@ -48,7 +48,7 @@ class BedrockProvider(LLMProvider):
     """
 
     region: str = "us-east-1"
-    default_model: str = "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    default_model: str = "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
     _name: str = "bedrock"
 
     @property
@@ -62,8 +62,8 @@ class BedrockProvider(LLMProvider):
     def list_models(self) -> list[ModelInfo]:
         return [
             ModelInfo(
-                name="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-                family="claude-3-5",
+                name="bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+                family="claude-opus-4-5",
                 context_window=200_000,
                 supports_tools=True,
                 supports_json=True,
