@@ -23,7 +23,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import argparse
 import datetime
 import logging
 import os
@@ -545,44 +544,3 @@ class tpm20:
             "crashes": crashes,
             "timeouts": timeouts,
         }
-
-    # -------------------------------------------------
-    # Console command handler
-    # -------------------------------------------------
-
-    def do_tpm20(self, *args: str) -> None:
-        """Execute TPM commands. Use -p to read public key, -r to get random bytes."""
-        parser = argparse.ArgumentParser(prog="tpm20", add_help=False)
-        parser.add_argument(
-            "-p",
-            "--public",
-            action="store_true",
-            help="Retrieve public key from the TPM",
-        )
-        parser.add_argument(
-            "-r", "--random", action="store_true", help="Get random bytes from the TPM"
-        )
-        parser.add_argument("-h", "--help", action="store_true", help="Show help")
-
-        try:
-            parsed_args = parser.parse_args(args)
-            if parsed_args.help:
-                parser.print_help()
-                return
-
-            if parsed_args.public:
-                handle = 0x81000000  # Example handle
-                public_key = self.read_public(handle)
-                print(f"Public key (hex): {public_key.hex()}")
-
-            if parsed_args.random:
-                random_bytes = self.get_random(16)
-                print(f"Random bytes (hex): {random_bytes.hex()}")
-
-            if not any([parsed_args.public, parsed_args.random]):
-                parser.print_help()
-
-        except SystemExit:
-            pass
-        except Exception as e:
-            print(f"Error: {e}")

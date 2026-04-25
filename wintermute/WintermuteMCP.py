@@ -59,16 +59,16 @@ Running
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib
 import io
 import json
 import logging
-import os
 import re
 import sys
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, List
+from typing import Any, AsyncIterator
 
 from mcp.server.fastmcp import FastMCP
 
@@ -79,7 +79,6 @@ from wintermute.ai.bootstrap import init_router
 from wintermute.ai.provider import Router, llms
 from wintermute.ai.tools_runtime import tools as global_tool_registry
 from wintermute.ai.use import simple_chat
-from wintermute.ai.utils.tool_factory import register_tools
 from wintermute.backends.json_storage import JsonFileBackend
 from wintermute.cloud.aws import AWSAccount, AWSServiceType
 from wintermute.core import (
@@ -103,144 +102,170 @@ from wintermute.utils.findings import (
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# MCP Server instance — tools are registered via decorators below.
-# ---------------------------------------------------------------------------
-mcp = FastMCP("WintermuteMCP")
-
-
 # ═══════════════════════════════════════════════════════════════════════════
-#  HARDWARE CARTRIDGE EXPOSURE
+#  DYNAMIC CARTRIDGE → MCP BRIDGE
 # ═══════════════════════════════════════════════════════════════════════════
-# Expose the Phase 2/3 cartridges (TPM, JTAG, firmware analysis) as MCP tools.
-# Each cartridge is instantiated defensively — missing kernel devices, absent
-# `openocd` binaries, or a JTAG host that is offline must NOT crash the MCP
-# server import, since the rest of the surface (operations, vulns, AI router)
-# remains useful regardless. Methods are also fed to ``register_tools`` so the
-# internal Wintermute tool registry mirrors what the MCP transport exposes.
+# The MCP server starts lightweight: zero hardware tools at import time.
+# Cartridges become visible to MCP clients when something inside this process
+# loads them via the `CartridgeManager` (an LLM agent, the Wintermute console
+# running in the same process, or a programmatic Python caller). The bridge
+# below subscribes to the manager's observer hook and:
 #
-# Environment variables (read once at module import):
-#   WINTERMUTE_TPM_DEVICE  — path to TPM character device (default /dev/tpm0).
-#   WINTERMUTE_JTAG_HOST   — OpenOCD telnet host (default localhost).
-#   WINTERMUTE_JTAG_PORT   — OpenOCD telnet port (default 4444).
+#   1. Diffs FastMCP's tool surface against the manager's currently loaded
+#      cartridges, then `add_tool` / `remove_tool` to keep them aligned.
+#   2. Sends the standard MCP `notifications/tools/list_changed` so connected
+#      clients know to re-fetch their tool list.
+#
+# Sync→async is bridged by capturing the MCP event loop in the FastMCP
+# lifespan and dispatching the notification via
+# `asyncio.run_coroutine_threadsafe` when the callback fires from a non-MCP
+# thread.
+
+# Names of tools that this bridge has registered with FastMCP. We track them
+# explicitly so we never accidentally remove the static `@mcp.tool()`-
+# decorated handlers that the rest of this file defines.
+_CARTRIDGE_BOUND_TOOL_NAMES: set[str] = set()
+
+# Captured at FastMCP startup via the lifespan context manager. ``None``
+# means the server isn't running yet; in that case we skip the broadcast
+# because no client is listening.
+_MCP_EVENT_LOOP: asyncio.AbstractEventLoop | None = None
 
 
-def _build_hardware_methods() -> List[Callable[..., Any]]:
-    """Instantiate each cartridge in isolation and collect its safe methods.
+def _sync_fastmcp_tools_from_registry() -> None:
+    """Diff FastMCP's tool surface against the live cartridge state and
+    add/remove tools so they match.
 
-    Cartridges that fail to construct (kernel devices missing, openocd not
-    installed, etc.) are logged and skipped so the rest of the MCP surface
-    keeps loading.
+    Called from the cartridge-change observer. Pure sync — safe to invoke
+    from any thread because FastMCP's tool manager is just an in-process
+    dict. The actual *notification* of clients happens separately in
+    :func:`_broadcast_tool_list_changed`.
     """
-    methods: List[Callable[..., Any]] = []
+    from wintermute.cartridges.manager import CartridgeManager
 
-    # --- TPM 2.0 ----------------------------------------------------------
-    try:
-        from wintermute.cartridges.tpm20 import TPMTransport, tpm20
+    manager = CartridgeManager()
+    desired: dict[str, Any] = {}
+    for cart_name in manager.list_loaded():
+        instance = manager.loaded_cartridges[cart_name]
+        for tool_name in manager.tool_names_for(cart_name):
+            method = getattr(instance, tool_name, None)
+            if method is None or not callable(method):
+                continue
+            desired[tool_name] = method
 
-        tpm_device = os.environ.get("WINTERMUTE_TPM_DEVICE", "/dev/tpm0")
-        tpm_instance = tpm20(transport=TPMTransport(device_path=tpm_device))
-        # Only the dict-returning audit methods are safe to surface as MCP
-        # tools. The byte-returning primitives (get_random, nv_read, …) need
-        # explicit hex shims before they are LLM-friendly.
-        methods.extend(
-            [
-                tpm_instance.test_pcr_state,
-                tpm_instance.test_da_lockout,
-            ]
-        )
-    except Exception as exc:
-        log.warning("TPM cartridge unavailable, skipping: %s", exc)
+    # Remove cartridge-bound tools that are no longer present.
+    for stale in list(_CARTRIDGE_BOUND_TOOL_NAMES - desired.keys()):
+        try:
+            mcp.remove_tool(stale)
+        except Exception:
+            log.exception("Failed to remove cartridge tool %r from MCP", stale)
+        _CARTRIDGE_BOUND_TOOL_NAMES.discard(stale)
 
-    # --- JTAG / OpenOCD --------------------------------------------------
-    try:
-        from wintermute.cartridges.jtag import (
-            JTAGCartridge,
-            OpenOCDConfig,
-            OpenOCDTransport,
-        )
-
-        jtag_host = os.environ.get("WINTERMUTE_JTAG_HOST", "localhost")
-        jtag_port = int(os.environ.get("WINTERMUTE_JTAG_PORT", "4444"))
-        jtag_transport = OpenOCDTransport(OpenOCDConfig(host=jtag_host, port=jtag_port))
-        jtag_instance = JTAGCartridge(transport=jtag_transport)
-        methods.extend(
-            [
-                jtag_instance.halt_core,
-                jtag_instance.resume_core,
-                jtag_instance.read_registers,
-                jtag_instance.read_memory,
-                jtag_instance.write_memory,
-                jtag_instance.dump_firmware,
-            ]
-        )
-    except Exception as exc:
-        log.warning("JTAG cartridge unavailable, skipping: %s", exc)
-
-    # --- Firmware analysis (stateless) -----------------------------------
-    try:
-        from wintermute.cartridges.firmware_analysis import (
-            FirmwareAnalysisCartridge,
-        )
-
-        firmware = FirmwareAnalysisCartridge()
-        methods.extend(
-            [
-                firmware.analyze_entropy,
-                firmware.scan_for_secrets,
-                firmware.extract_strings,
-                firmware.find_base_address,
-            ]
-        )
-    except Exception as exc:
-        log.warning("Firmware analysis cartridge unavailable, skipping: %s", exc)
-
-    return methods
+    # Add freshly-loaded cartridge tools.
+    for name, method in desired.items():
+        if name in _CARTRIDGE_BOUND_TOOL_NAMES:
+            continue
+        description = (getattr(method, "__doc__", "") or "").strip()
+        try:
+            mcp.add_tool(method, name=name, description=description)
+            _CARTRIDGE_BOUND_TOOL_NAMES.add(name)
+        except Exception:
+            log.exception("Failed to add cartridge tool %r to MCP", name)
 
 
-def _bind_hardware_cartridges() -> List[str]:
-    """Register cartridge methods internally and bind them to the MCP server.
+async def _broadcast_tool_list_changed() -> None:
+    """Send the standard ``notifications/tools/list_changed`` to clients.
 
-    Returns the list of tool names that were successfully bound. Any single
-    failure during MCP binding is logged so a flaky FastMCP introspection on
-    one method cannot mask the rest.
+    The MCP Python SDK dispatches this notification per-session via
+    :meth:`mcp.server.session.ServerSession.send_tool_list_changed`. The
+    only public path to a session is :attr:`Server.request_context`, which
+    is set during request handling. When a cartridge changes from outside
+    a request, request_context is empty and we log + return — clients can
+    still poll ``list_tools`` to pick up the fresh registry FastMCP now
+    holds (already updated by :func:`_sync_fastmcp_tools_from_registry`).
     """
-    methods = _build_hardware_methods()
-    if not methods:
-        return []
-
-    # 1. Generate Wintermute Tool descriptors (input/output JSON schemas) and
-    #    feed them into the internal global registry. This keeps the LLM
-    #    tool-calling pipeline (`tool_calling_chat`) in sync with what MCP
-    #    clients see externally.
+    server = mcp._mcp_server
     try:
-        wintermute_tools = register_tools(methods)
-    except Exception as exc:
-        log.error("Failed to generate cartridge tool schemas: %s", exc)
-        return []
+        ctx = server.request_context
+    except (LookupError, AttributeError):
+        log.debug(
+            "tool_list_changed: no active request context; "
+            "clients will see updates on next list_tools poll"
+        )
+        return
 
-    bound: List[str] = []
-    for tool, fn in zip(wintermute_tools, methods):
-        try:
-            global_tool_registry.register(tool)
-        except Exception as exc:
-            log.warning("Skipping internal registration for %s: %s", tool.name, exc)
-
-        # 2. Bind to the FastMCP surface so external clients can discover and
-        #    execute the same capability. FastMCP introspects the bound
-        #    method's type hints to derive its JSON schema.
-        description = (fn.__doc__ or tool.description or "").strip()
-        try:
-            mcp.add_tool(fn, name=tool.name, description=description)
-            bound.append(tool.name)
-        except Exception as exc:
-            log.warning("Failed to bind %s to MCP server: %s", tool.name, exc)
-
-    log.info("Hardware cartridges exposed via MCP: %s", bound)
-    return bound
+    session = getattr(ctx, "session", None)
+    if session is None:
+        return
+    try:
+        await session.send_tool_list_changed()
+    except Exception:
+        log.exception("tool_list_changed: send via active session failed")
 
 
-_HARDWARE_TOOLS_BOUND: List[str] = _bind_hardware_cartridges()
+def _on_cartridge_changed() -> None:
+    """Sync observer fired by :class:`CartridgeManager` on every load/unload.
+
+    Step 1 (always-on): rebuild FastMCP's tool surface so subsequent
+    ``list_tools`` requests reflect reality.
+
+    Step 2 (best effort): broadcast the protocol notification on the MCP
+    event loop so currently-connected clients pick up the change without
+    polling. Skipped when the server isn't running yet.
+    """
+    _sync_fastmcp_tools_from_registry()
+
+    loop = _MCP_EVENT_LOOP
+    if loop is None or not loop.is_running():
+        return
+
+    coro = _broadcast_tool_list_changed()
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is loop:
+        # Already executing on the MCP loop — schedule directly.
+        loop.create_task(coro)
+    else:
+        # Different thread (e.g. console driving the manager) — bridge.
+        asyncio.run_coroutine_threadsafe(coro, loop)
+
+
+@asynccontextmanager
+async def _mcp_lifespan(_server: FastMCP) -> AsyncIterator[None]:
+    """Capture the MCP event loop so sync observer callbacks can bridge
+    into the protocol notification path.
+
+    Also performs an initial sync so any cartridges loaded BEFORE the
+    server started running (e.g. by tests or a colocated console) become
+    visible from the very first ``list_tools`` request.
+    """
+    global _MCP_EVENT_LOOP
+    _MCP_EVENT_LOOP = asyncio.get_running_loop()
+    _sync_fastmcp_tools_from_registry()
+    try:
+        yield
+    finally:
+        _MCP_EVENT_LOOP = None
+
+
+# ---------------------------------------------------------------------------
+# MCP Server instance — tools are registered via decorators below; cartridge
+# tools are registered dynamically through the observer bridge above.
+# ---------------------------------------------------------------------------
+mcp = FastMCP("WintermuteMCP", lifespan=_mcp_lifespan)
+
+
+def _register_cartridge_observer() -> None:
+    """Subscribe the bridge to :class:`CartridgeManager`. Idempotent."""
+    from wintermute.cartridges.manager import CartridgeManager
+
+    CartridgeManager().register_callback(_on_cartridge_changed)
+
+
+_register_cartridge_observer()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -16,7 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
-from prompt_toolkit import PromptSession
+from prompt_toolkit import HTML, PromptSession
 from prompt_toolkit.completion import NestedCompleter
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -117,6 +117,10 @@ class WintermuteConsole:
         self.session: PromptSession[Any] = PromptSession(history=InMemoryHistory())
         self.operation = Operation(operation_name="default")
         self.tools_runtime = ToolsRuntime()
+        # UX state: tracks the active sub-menu (mcp/tools/operation/add). The
+        # prompt renderer in `run()` reads this string verbatim, so anything
+        # truthy will surface as `[<context>]` in the prompt. Reset by `back`.
+        self.current_context: str = ""
         # Outbound MCP client manager — owns ~/.wintermute/mcp_servers.json and a
         # background asyncio loop on a daemon thread. Instantiation is cheap;
         # the loop only spins up when the operator first runs `mcp start`.
@@ -211,6 +215,16 @@ class WintermuteConsole:
                 "separator": "ansicyan",
             }
         )
+
+    @property
+    def active_operation(self) -> Operation:
+        """Live alias for the operation currently held in ``self.operation``.
+
+        Stays in sync even when the operation is reassigned (e.g. via
+        ``operation create`` / ``workspace switch``), so callers can rely on
+        a single attribute name regardless of how the operation was loaded.
+        """
+        return self.operation
 
     def _scan_cartridges(self) -> List[str]:
         """Scans wintermute/cartridges for available modules."""
@@ -1695,7 +1709,7 @@ class WintermuteConsole:
         self.rich_console.print(f"[*] Constructing {entity_type} node...")
 
     def cmd_back(self) -> None:
-        """Pops the current context from the stack."""
+        """Pops the current context from the stack and clears the UI menu."""
         if len(self.context_stack) > 1:
             self.context_stack.pop()
 
@@ -1710,6 +1724,15 @@ class WintermuteConsole:
         else:
             # Already at root
             pass
+
+        # The new UI menu marker pops one level at a time so deep contexts
+        # like `cartridges/tpm20` step through `cartridges` → root cleanly:
+        #   * `cartridges/<name>` → `cartridges`
+        #   * anything else       → root (`""`)
+        if self.current_context.startswith("cartridges/"):
+            self.current_context = "cartridges"
+        else:
+            self.current_context = ""
 
     # --- Local Context (Cartridge) ---
 
@@ -2529,27 +2552,693 @@ class WintermuteConsole:
         except Exception as e:
             self.rich_console.print(f"[red][!] Backend setup error: {e}[/]")
 
+    # --- Help / Show / Add (UX overhaul) -----------------------------------
+
+    def cmd_help(self, args: List[str]) -> None:
+        """Context-aware help.
+
+        Resolution order:
+            1. Explicit topic (``help mcp``).
+            2. Active sub-menu (``self.current_context``).
+            3. Main menu fallback.
+
+        The legacy ``show_commands()`` is preserved for callers that still
+        use the old API (``help <topic>`` mappings for the builder /
+        cartridge contexts that cmd_help does not own).
+        """
+        topic = args[0].lower() if args else self.current_context
+        # Deep-context contexts (`cartridges/tpm20`) share the same help
+        # block as the parent menu — the deep shorthand is documented in
+        # the cartridges sub-help.
+        if topic.startswith("cartridges/"):
+            topic = "cartridges"
+        if topic in ("mcp", "tools", "operation", "add", "cartridges"):
+            self._render_subhelp(topic)
+            return
+        if topic:
+            # Defer to the legacy multi-context help for unknown topics so
+            # the existing builder/cartridge/backend help blocks still work.
+            self.show_commands(topic)
+            return
+
+        table = Table(title="onoSendai Command Matrix", border_style="bright_blue")
+        table.add_column("Command", style="cyan")
+        table.add_column("Description", style="white")
+        table.add_row(
+            "mcp <subcommand>", "External MCP server management (try `help mcp`)"
+        )
+        table.add_row("tools <subcommand>", "AI tool inventory (try `help tools`)")
+        table.add_row(
+            "operation [create]",
+            "Manage operations / persistence (try `help operation`)",
+        )
+        table.add_row("add <type> [args]", "Add objects to workspace (try `help add`)")
+        table.add_row("show", "Print operation state as a tree")
+        table.add_row(
+            "cartridges <subcommand>",
+            "Dynamic cartridge load/unload/run (try `help cartridges`)",
+        )
+        table.add_row("ai <cmd>", "AI management and chat (try `help ai`)")
+        table.add_row("backend", "Enter backend management menu")
+        table.add_row("status", "Show operation status tree")
+        table.add_row("vars <path>", "Inspect object variables")
+        table.add_row("workspace switch <name>", "Switch active operation")
+        table.add_row("back", "Exit current sub-menu")
+        table.add_row("exit", "Disconnect from the matrix")
+        self.rich_console.print(table)
+
+    def _render_subhelp(self, topic: str) -> None:
+        if topic == "mcp":
+            table = Table(
+                title="mcp — External MCP Server Management",
+                border_style="bright_blue",
+            )
+            table.add_column("Sub-command", style="cyan")
+            table.add_column("Usage", style="magenta")
+            table.add_column("Description", style="white")
+            table.add_row(
+                "register",
+                "mcp register <name> <cmd> [arg ...]",
+                "Persist a server definition to ~/.wintermute/mcp_servers.json",
+            )
+            table.add_row(
+                "list",
+                "mcp list",
+                "Show registered server definitions",
+            )
+            table.add_row(
+                "delete",
+                "mcp delete <name>",
+                "Remove a registered server (stops it first if running)",
+            )
+            table.add_row(
+                "start",
+                "mcp start <name>",
+                "Connect to a registered server (non-blocking; check `mcp status`)",
+            )
+            table.add_row(
+                "stop",
+                "mcp stop <name>",
+                "Terminate a running session and force-kill the subprocess",
+            )
+            table.add_row(
+                "status",
+                "mcp status",
+                "Show running sessions, PIDs, and exposed tool counts",
+            )
+            self.rich_console.print(table)
+            return
+
+        if topic == "tools":
+            table = Table(title="tools — AI Tool Inventory", border_style="bright_blue")
+            table.add_column("Sub-command", style="cyan")
+            table.add_column("Usage", style="magenta")
+            table.add_column("Description", style="white")
+            table.add_row(
+                "list",
+                "tools list",
+                "List native AI tools in the global registry",
+            )
+            table.add_row(
+                "mcp",
+                "tools mcp",
+                "List tools exposed by connected MCP servers",
+            )
+            table.add_row(
+                "load",
+                "tools load <func>",
+                "Register a Python callable as an AI tool",
+            )
+            self.rich_console.print(table)
+            return
+
+        if topic == "operation":
+            table = Table(
+                title="operation — Operation Deck", border_style="bright_blue"
+            )
+            table.add_column("Sub-command", style="cyan")
+            table.add_column("Usage", style="magenta")
+            table.add_column("Description", style="white")
+            table.add_row(
+                "(default)",
+                "operation",
+                "Enter the operation context",
+            )
+            table.add_row(
+                "create",
+                "operation create <name>",
+                "Start a new operation",
+            )
+            table.add_row(
+                "set",
+                "set <key> <val>",
+                "Inside `[operation]`, set name/start_date/end_date/ticket",
+            )
+            table.add_row("save", "save", "Persist operation to backend")
+            table.add_row("load", "load <name>", "Load operation from backend")
+            table.add_row("delete", "delete <name>", "Delete operation from backend")
+            self.rich_console.print(table)
+            return
+
+        if topic == "add":
+            table = Table(title="add — Populate Workspace", border_style="bright_blue")
+            table.add_column("Type", style="cyan")
+            table.add_column("Usage", style="magenta")
+            table.add_column("Description", style="white")
+            table.add_row(
+                "analyst",
+                'add analyst "<name>" <userid> <email>',
+                "Append an Analyst (use quotes for multi-word names)",
+            )
+            table.add_row(
+                "device",
+                "add device <hostname> [ip]",
+                "Append a Device",
+            )
+            table.add_row(
+                "user",
+                "add user <uid> <name> <email>",
+                "Append a User",
+            )
+            table.add_row(
+                "service",
+                "add service <device_hostname> <port> <app>",
+                "Attach a Service to an existing Device",
+            )
+            table.add_row(
+                "(builder)",
+                "add <type>",
+                "Bare type with no extra args drops into the interactive builder",
+            )
+            self.rich_console.print(table)
+            return
+
+        if topic == "cartridges":
+            table = Table(
+                title="cartridges — Dynamic Cartridge Manager",
+                border_style="bright_blue",
+            )
+            table.add_column("Sub-command", style="cyan")
+            table.add_column("Usage", style="magenta")
+            table.add_column("Description", style="white")
+            table.add_row(
+                "list",
+                "cartridges list",
+                "Show available + currently loaded cartridges",
+            )
+            table.add_row(
+                "load",
+                "cartridges load <name>",
+                "Import the module, instantiate it, register its public "
+                "methods as AI tools",
+            )
+            table.add_row(
+                "unload",
+                "cartridges unload <name>",
+                "Drop the instance and unregister its tools",
+            )
+            table.add_row(
+                "run",
+                "cartridges run <cartridge> <function> [args ...]",
+                "Invoke a public method on a loaded cartridge "
+                "(e.g. `cartridges run tpm20 test_pcr_state 0`)",
+            )
+            self.rich_console.print(table)
+            return
+
+    def cmd_show(self) -> None:
+        """Visualise the live operation as a Rich tree.
+
+        Walks ``self.active_operation`` and prints a tree with the
+        operation name, assigned analysts, registered devices, and each
+        device's targeted peripherals. If the operation is empty the
+        method emits a single warning line so the user sees explicit
+        feedback instead of the silent prompt the previous implementation
+        produced.
+        """
+        op = self.active_operation
+        analysts = list(getattr(op, "analysts", []) or [])
+        devices = list(getattr(op, "devices", []) or [])
+        any_peripherals = any(getattr(d, "peripherals", None) for d in devices)
+
+        if not analysts and not devices and not any_peripherals:
+            self.rich_console.print("[!] Operation is currently empty.")
+            return
+
+        op_name = getattr(op, "operation_name", "<unnamed>")
+        tree = Tree(f"[bold cyan]Operation:[/] {op_name}")
+
+        analysts_branch = tree.add("[bold]Analysts[/]")
+        if analysts:
+            for analyst in analysts:
+                name = getattr(analyst, "name", "")
+                uid = getattr(analyst, "userid", "")
+                email = getattr(analyst, "email", "")
+                bits = [b for b in (name, uid, email) if b]
+                analysts_branch.add(" — ".join(bits) or repr(analyst))
+        else:
+            analysts_branch.add("[dim]none[/]")
+
+        devices_branch = tree.add("[bold]Devices[/]")
+        if devices:
+            for device in devices:
+                hostname = getattr(device, "hostname", "<unknown>")
+                ip = getattr(device, "ipaddr", "")
+                label = f"{hostname}"
+                if ip:
+                    label += f" ([dim]{ip}[/])"
+                d_node = devices_branch.add(label)
+                peripherals = list(getattr(device, "peripherals", []) or [])
+                if peripherals:
+                    p_node = d_node.add("[bold]Peripherals[/]")
+                    for peripheral in peripherals:
+                        p_type = type(peripheral).__name__
+                        p_name = getattr(peripheral, "name", "") or ""
+                        p_label = f"{p_type}: {p_name}" if p_name else p_type
+                        p_node.add(p_label)
+        else:
+            devices_branch.add("[dim]none[/]")
+
+        self.rich_console.print(tree)
+
+    def cmd_add(self, input_string: str) -> None:
+        """Strict-parse + append entity to the active operation.
+
+        Uses :func:`shlex.split` so quoted strings (e.g. multi-word analyst
+        names) survive intact: ``add analyst "foo bar" foobar foobar@x.com``
+        becomes a single ``"foo bar"`` argument. If the entity type does not
+        match a supported strict-parse path, the call falls through to the
+        existing interactive builder via :meth:`cmd_add_enter`.
+        """
+        try:
+            tokens = shlex.split(input_string)
+        except ValueError as exc:
+            self.rich_console.print(
+                f"[red][!] Bad quoting in `add` arguments: {exc}[/]"
+            )
+            return
+
+        # Tolerate callers that pass the full line (`add analyst …`) or just
+        # the tail (`analyst …`). The first literal token is dropped if it
+        # is the command name.
+        if tokens and tokens[0].lower() == "add":
+            tokens = tokens[1:]
+        if not tokens:
+            self.rich_console.print(
+                "Usage: add <analyst|device|user|service> <args ...>"
+            )
+            return
+
+        entity = tokens[0].lower()
+        rest = tokens[1:]
+        op = self.active_operation
+
+        if entity == "analyst":
+            if len(rest) != 3:
+                self.rich_console.print('Usage: add analyst "<name>" <userid> <email>')
+                return
+            name, userid, email = rest
+            op.addAnalyst(name, userid, email)
+            self.rich_console.print(
+                f"[green]✔[/] Added analyst [bold]{name}[/] ({userid})"
+            )
+            return
+
+        if entity == "device":
+            if not (1 <= len(rest) <= 2):
+                self.rich_console.print("Usage: add device <hostname> [ip]")
+                return
+            hostname = rest[0]
+            ip = rest[1] if len(rest) == 2 else "127.0.0.1"
+            op.addDevice(hostname, ipaddr=ip)
+            self.rich_console.print(
+                f"[green]✔[/] Added device [bold]{hostname}[/] ({ip})"
+            )
+            return
+
+        if entity == "user":
+            if len(rest) != 3:
+                self.rich_console.print("Usage: add user <uid> <name> <email>")
+                return
+            uid, name, email = rest
+            op.addUser(uid, name, email, teams=[])
+            self.rich_console.print(f"[green]✔[/] Added user [bold]{uid}[/] ({name})")
+            return
+
+        if entity == "service":
+            if len(rest) != 3:
+                self.rich_console.print(
+                    "Usage: add service <device_hostname> <port> <app>"
+                )
+                return
+            host, port_str, app = rest
+            try:
+                port = int(port_str)
+            except ValueError:
+                self.rich_console.print(
+                    f"[red][!] Service port must be an integer, got {port_str!r}[/]"
+                )
+                return
+            device = op.getDeviceByHostname(host)
+            if device is None:
+                self.rich_console.print(
+                    f"[red][!] No device named {host!r} in this operation.[/]"
+                )
+                return
+            service = Service(portNumber=port, app=app)
+            device.services.append(service)
+            self.rich_console.print(f"[green]✔[/] Added service {port}/{app} to {host}")
+            return
+
+        # Unsupported / partial → keep the legacy interactive builder so
+        # paths like `add cloudaccount` continue to work.
+        self.cmd_add_enter(entity)
+
+    # --- Cartridge Manager (replaces legacy `use`) -------------------------
+
+    def cmd_cartridges(self, args: List[str]) -> None:
+        """Dispatcher for ``cartridges <list|load|unload|run> [...]``.
+
+        Backed by :class:`wintermute.cartridges.manager.CartridgeManager`,
+        which owns dynamic import + AI tool registration. Designed so a
+        single command — ``cartridges run tpm20 test_pcr_state 0`` —
+        invokes any public method on a loaded cartridge directly from the
+        REPL.
+        """
+        from wintermute.cartridges.manager import CartridgeManager
+
+        manager = CartridgeManager()
+
+        if not args:
+            self.rich_console.print(
+                "Usage: cartridges <list|load|unload|run> [args ...]  "
+                "(try `help cartridges`)"
+            )
+            return
+
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "list":
+            if rest:
+                # `cartridges list <name>` — deep inspection of a single
+                # cartridge: render every public function with its
+                # type-hinted signature and docstring summary.
+                self._render_cartridge_detail(manager, rest[0])
+            else:
+                self._render_cartridges_list(manager)
+            return
+
+        if sub == "load":
+            if len(rest) != 1:
+                self.rich_console.print("Usage: cartridges load <name>")
+                return
+            name = rest[0]
+            try:
+                loaded = manager.load(name)
+            except ModuleNotFoundError:
+                self.rich_console.print(
+                    f"[red][!] Cartridge {name!r} not found. "
+                    "Run `cartridges list` for available modules.[/]"
+                )
+                return
+            except Exception as exc:
+                self.rich_console.print(
+                    f"[red][!] Failed to load cartridge {name!r}: {exc}[/]"
+                )
+                return
+            if loaded:
+                tool_names = manager.tool_names_for(name)
+                self.rich_console.print(
+                    f"[green]✔[/] Loaded cartridge [bold]{name}[/] "
+                    f"— {len(tool_names)} tool(s) registered with the AI."
+                )
+                if tool_names:
+                    # Verbose surface so the operator immediately sees what
+                    # functions are now callable via `cartridges run` (or
+                    # via the deep context `[cartridges/<name>]`).
+                    self.rich_console.print(
+                        f"[*] Exposed functions: [cyan]{', '.join(tool_names)}[/]"
+                    )
+            else:
+                self.rich_console.print(
+                    f"[yellow]Cartridge {name!r} was already loaded.[/]"
+                )
+            return
+
+        if sub == "unload":
+            if len(rest) != 1:
+                self.rich_console.print("Usage: cartridges unload <name>")
+                return
+            name = rest[0]
+            if manager.unload(name):
+                self.rich_console.print(
+                    f"[green]✔[/] Unloaded cartridge [bold]{name}[/]"
+                )
+            else:
+                self.rich_console.print(f"[yellow]Cartridge {name!r} is not loaded.[/]")
+            return
+
+        if sub == "run":
+            if len(rest) < 2:
+                self.rich_console.print(
+                    "Usage: cartridges run <cartridge> <function> [args ...]"
+                )
+                return
+            self._run_cartridge_function(manager, rest[0], rest[1], rest[2:])
+            return
+
+        self.rich_console.print(
+            f"[red][!] Unknown cartridges subcommand: {sub!r}[/]\n"
+            "Usage: cartridges <list|load|unload|run> [args ...]"
+        )
+
+    def _render_cartridges_list(self, manager: Any) -> None:
+        available = manager.list_available()
+        loaded = set(manager.list_loaded())
+
+        avail_table = Table(title="📦 Available Cartridges", border_style="bright_blue")
+        avail_table.add_column("Name", style="cyan")
+        avail_table.add_column("Loaded", style="green")
+        if not available:
+            avail_table.add_row("[dim]none[/]", "")
+        else:
+            for name in available:
+                avail_table.add_row(name, "✔" if name in loaded else "")
+        self.rich_console.print(avail_table)
+
+        loaded_table = Table(title="🟢 Loaded Cartridges", border_style="bright_blue")
+        loaded_table.add_column("Name", style="cyan")
+        loaded_table.add_column("Class", style="magenta")
+        loaded_table.add_column("Tools", style="green", justify="right")
+        if not loaded:
+            loaded_table.add_row("[dim]none[/]", "", "")
+        else:
+            for name in manager.list_loaded():
+                instance = manager.loaded_cartridges[name]
+                tool_count = len(manager.tool_names_for(name))
+                loaded_table.add_row(name, type(instance).__name__, str(tool_count))
+        self.rich_console.print(loaded_table)
+
+    def _render_cartridge_detail(self, manager: Any, name: str) -> None:
+        """Print every public function on the named cartridge.
+
+        If the cartridge is not currently loaded the user gets a focused
+        hint instead of an empty table — the cartridge can be available
+        on disk but not yet instantiated.
+        """
+        if name not in manager.list_loaded():
+            if name in manager.list_available():
+                self.rich_console.print(
+                    f"[yellow]Cartridge {name!r} is available but not loaded — "
+                    f"run `cartridges load {name}` first.[/]"
+                )
+            else:
+                self.rich_console.print(f"[red][!] Cartridge {name!r} not found.[/]")
+            return
+
+        instance = manager.loaded_cartridges[name]
+        tool_names = manager.tool_names_for(name)
+        table = Table(
+            title=f"⚙️ Cartridge: {name} ({type(instance).__name__})",
+            border_style="bright_blue",
+        )
+        table.add_column("Function", style="cyan")
+        table.add_column("Signature", style="magenta")
+        table.add_column("Description", style="white")
+
+        if not tool_names:
+            table.add_row("[dim]no public functions exposed[/]", "", "")
+            self.rich_console.print(table)
+            return
+
+        for tool_name in tool_names:
+            method = getattr(instance, tool_name, None)
+            if method is None or not callable(method):
+                continue
+            try:
+                sig = inspect.signature(method)
+                sig_str = str(sig)
+            except (TypeError, ValueError):
+                sig_str = "(...)"
+            doc = (getattr(method, "__doc__", "") or "").strip()
+            first_line = doc.splitlines()[0] if doc else ""
+            if len(first_line) > 80:
+                first_line = first_line[:77] + "…"
+            table.add_row(tool_name, sig_str, first_line)
+        self.rich_console.print(table)
+
+    def _run_cartridge_function(
+        self,
+        manager: Any,
+        cartridge_name: str,
+        function_name: str,
+        raw_args: List[str],
+    ) -> None:
+        """Invoke a single public method on a loaded cartridge.
+
+        The trailing ``raw_args`` are joined and re-shlex'd so quoted
+        strings (``cartridges run x foo "multi word"``) survive. Numeric
+        annotations are coerced via the function's type hints so callers
+        can pass ``0`` instead of ``"0"`` for an ``int`` parameter.
+        """
+        try:
+            instance = manager.get(cartridge_name)
+        except KeyError:
+            self.rich_console.print(
+                f"[red][!] Cartridge {cartridge_name!r} is not loaded. "
+                f"Try `cartridges load {cartridge_name}` first.[/]"
+            )
+            return
+
+        if function_name.startswith("_"):
+            self.rich_console.print(
+                f"[red][!] {function_name!r} is private; only public methods "
+                "can be invoked via `cartridges run`.[/]"
+            )
+            return
+
+        try:
+            func = getattr(instance, function_name)
+        except AttributeError:
+            self.rich_console.print(
+                f"[red][!] Cartridge {cartridge_name!r} has no method "
+                f"{function_name!r}.[/]"
+            )
+            return
+        if not callable(func):
+            self.rich_console.print(
+                f"[red][!] {function_name!r} on {cartridge_name!r} is not callable.[/]"
+            )
+            return
+
+        try:
+            tokens = shlex.split(" ".join(raw_args)) if raw_args else []
+        except ValueError as exc:
+            self.rich_console.print(f"[red][!] Bad quoting in run arguments: {exc}[/]")
+            return
+
+        coerced = self._coerce_run_args(func, tokens)
+
+        try:
+            result = func(*coerced)
+        except Exception as exc:
+            self.rich_console.print(
+                f"[red][!] {cartridge_name}.{function_name} raised: {exc}[/]"
+            )
+            return
+
+        self.rich_console.print(result)
+
+    @staticmethod
+    def _coerce_run_args(func: Any, raw: List[str]) -> List[Any]:
+        """Best-effort positional argument coercion using ``func``'s hints."""
+        from typing import get_type_hints
+
+        try:
+            hints = get_type_hints(func)
+            sig = inspect.signature(func)
+        except Exception:
+            return list(raw)
+
+        params = [p for n, p in sig.parameters.items() if n != "self"]
+        out: List[Any] = []
+        for idx, value in enumerate(raw):
+            if idx >= len(params):
+                out.append(value)
+                continue
+            target = hints.get(params[idx].name, str)
+            try:
+                if target is bool:
+                    out.append(value.lower() in ("true", "1", "yes", "on"))
+                elif target is int:
+                    out.append(int(value, 0))  # supports "0x..." literals
+                elif target is float:
+                    out.append(float(value))
+                elif target is bytes:
+                    out.append(value.encode("utf-8"))
+                else:
+                    out.append(value)
+            except (ValueError, TypeError):
+                out.append(value)
+        return out
+
     def cmd_tools(self, *args: str) -> None:
         if not args:
-            self.rich_console.print("Usage: tools <load|list> [args]")
+            self.rich_console.print("Usage: tools <list|mcp|load> [args]")
             return
 
         sub = args[0].lower()
         if sub == "list":
-            table = Table(title="Loaded AI Tools")
-            table.add_column("Tool Name", style="cyan")
-            table.add_column("Description", style="white")
-
-            # Correctly access loaded tools from the global registry
-            for name, tool in global_tool_registry._tools.items():
-                table.add_row(
-                    name,
-                    tool.description[:100] + "..."
-                    if len(tool.description) > 100
-                    else tool.description,
+            tools_dict = global_tool_registry._tools
+            if not tools_dict:
+                self.rich_console.print(
+                    "[yellow]No native AI tools registered. "
+                    "Load one with `tools load <func>`.[/]"
                 )
-
+                return
+            # Cross-reference with the MCP manager so duplicates (when the
+            # MCP server has registered into the global registry too) are
+            # tagged correctly.
+            external_names: set[str] = set()
+            try:
+                external_names = {
+                    spec.name for spec in self.mcp_manager.get_all_external_tools()
+                }
+            except Exception:
+                pass
+            table = Table(title="🧰 Native AI Tools", border_style="bright_blue")
+            table.add_column("Name", style="cyan")
+            table.add_column("Description", style="white")
+            table.add_column("Source", style="magenta")
+            for name, tool in tools_dict.items():
+                desc = tool.description or ""
+                short = (desc[:80] + "…") if len(desc) > 80 else desc
+                source = "mcp" if name in external_names else "internal"
+                table.add_row(name, short, source)
             self.rich_console.print(table)
+            return
+
+        elif sub == "mcp":
+            specs = self.mcp_manager.get_all_external_tools()
+            if not specs:
+                self.rich_console.print(
+                    "[yellow]No external MCP tools available — "
+                    "start a server with `mcp start <name>`.[/]"
+                )
+                return
+            table = Table(title="🔌 External MCP Tools", border_style="bright_blue")
+            table.add_column("Name", style="cyan")
+            table.add_column("Description", style="white")
+            table.add_column("Server", style="magenta")
+            for spec in specs:
+                # Names from MCPClientManager are namespaced as `<server>__<tool>`.
+                server, _, _ = spec.name.partition("__")
+                desc = spec.description or ""
+                short = (desc[:80] + "…") if len(desc) > 80 else desc
+                table.add_row(spec.name, short, server or "unknown")
+            self.rich_console.print(table)
+            return
 
         elif sub == "load" and len(args) >= 2:
             func_name = args[1]
@@ -2698,9 +3387,79 @@ class WintermuteConsole:
 
     # --- Main Loop ---
 
+    # Commands that must NEVER be intercepted by contextual routing — even
+    # when the user is inside a sub-menu. Most of these short-circuit in
+    # `run()` before reaching this dispatcher; `show` is the one that
+    # actually flows through here, but listing the others defensively keeps
+    # the rule in one place.
+    _SAFETY_COMMANDS = frozenset(
+        {"back", "exit", "help", "show", "status", "workspace"}
+    )
+
+    async def _dispatch_contextual(self, cmd: str, args: List[str]) -> bool:
+        """Route ``cmd`` based on :attr:`current_context`.
+
+        Returns ``True`` when the command was handled by a contextual
+        rule. ``False`` means "fall through to the regular dispatcher".
+
+        Two contexts have meaningful sub-routing today:
+
+        * ``[cartridges]``: ``list/load/unload/run`` go straight to
+          :meth:`cmd_cartridges`; typing the *name* of a loaded cartridge
+          drills down into ``[cartridges/<name>]``.
+        * ``[cartridges/<name>]``: ``list``, ``run``, and ``unload``
+          implicitly carry the cartridge name so the user can type
+          ``run test_pcr_state 0`` without re-naming the cartridge.
+        """
+        from wintermute.cartridges.manager import CartridgeManager
+
+        manager = CartridgeManager()
+
+        if self.current_context == "cartridges":
+            if cmd in ("list", "load", "unload", "run"):
+                self.cmd_cartridges([cmd, *args])
+                return True
+            # Drill into a loaded cartridge: e.g. inside `[cartridges]`,
+            # typing `tpm20` becomes `[cartridges/tpm20]` so the operator
+            # can issue bare `run test_pcr_state 0`.
+            if cmd in manager.list_loaded():
+                self.current_context = f"cartridges/{cmd}"
+                return True
+            return False
+
+        if self.current_context.startswith("cartridges/"):
+            cart_name = self.current_context.split("/", 1)[1]
+            if cmd == "list":
+                self.cmd_cartridges(["list", cart_name])
+                return True
+            if cmd == "run":
+                self.cmd_cartridges(["run", cart_name, *args])
+                return True
+            if cmd == "unload":
+                self.cmd_cartridges(["unload", cart_name])
+                # Pop one level up so the prompt reflects reality.
+                self.current_context = "cartridges"
+                return True
+            return False
+
+        return False
+
     async def _dispatch_main_commands(self, cmd: str, args: List[str]) -> bool:
-        """Handlers for Main Menu / Global functional commands."""
+        """Handlers for Main Menu / Global functional commands.
+
+        Contextual routing runs first so commands typed inside a sub-menu
+        (``list`` inside ``[cartridges]``, ``run test_pcr_state 0`` inside
+        ``[cartridges/tpm20]``, …) reach the right handler instead of
+        falling through to "unknown command". Safety commands listed in
+        :attr:`_SAFETY_COMMANDS` always bypass this layer.
+        """
+        if cmd not in self._SAFETY_COMMANDS:
+            handled = await self._dispatch_contextual(cmd, args)
+            if handled:
+                return True
+
         if cmd == "operation":
+            self.current_context = "operation"
             if args and args[0] == "create":
                 self.cmd_operation_create(args[1] if len(args) > 1 else "default")
             else:
@@ -2709,11 +3468,22 @@ class WintermuteConsole:
 
         elif cmd == "add":
             if not args:
-                self.rich_console.print("Usage: add <entity_type>")
+                # Bare `add` — drop into the [add] menu so the user can
+                # discover supported entity types via `help`.
+                self.current_context = "add"
+                self.rich_console.print(
+                    "Usage: add <analyst|device|user|service> [args ...]"
+                )
                 return True
-            entity = args[0].lower()
-            # Always use the interactive builder for 'add' now
-            self.cmd_add_enter(entity)
+            if len(args) == 1:
+                # `add <type>` with no values — preserve the legacy
+                # interactive builder (test_console_commands relies on
+                # this exact dispatch contract).
+                entity = args[0].lower()
+                self.cmd_add_enter(entity)
+                return True
+            # `add <type> <args ...>` — strict shlex parse + append.
+            self.cmd_add(" ".join(args))
             return True
 
         elif cmd == "edit" and len(args) >= 1:
@@ -2724,8 +3494,12 @@ class WintermuteConsole:
             self.cmd_delete(" ".join(args))
             return True
 
-        elif cmd == "use":
-            self.cmd_use(*args)
+        elif cmd == "cartridges":
+            # New dynamic cartridge manager — replaces the legacy `use`
+            # command. Sets the [cartridges] context for the prompt and
+            # routes load/unload/list/run via cmd_cartridges.
+            self.current_context = "cartridges"
+            self.cmd_cartridges(args)
             return True
 
         elif cmd == "set" and len(args) >= 2 and not self.builder_stack:
@@ -2750,13 +3524,12 @@ class WintermuteConsole:
                 # show <path> — alias for vars
                 self.cmd_vars(" ".join(args))
             else:
-                # Bare 'show' — contextual
-                if self.current_cartridge_name:
-                    self.show_options()
-                elif self.context_stack[-1] == "operation":
-                    self.cmd_show_current_context()
-                else:
-                    self.cmd_status()
+                # Bare `show` — print the operation tree. The previous
+                # implementation silently fell through to context-specific
+                # branches (cartridge options / cmd_status) which left the
+                # user staring at an empty prompt when no cartridge was
+                # loaded. Now we always emit something.
+                self.cmd_show()
             return True
 
         elif cmd == "vars" and args:
@@ -2771,11 +3544,21 @@ class WintermuteConsole:
             await self.cmd_backend_enter()
             return True
 
-        elif cmd == "tools" and args:
-            self.cmd_tools(*args)
+        elif cmd == "tools":
+            # Bare `tools` lands in the [tools] sub-menu; with args we
+            # stay in whatever context we were in but still update so
+            # `help` resolves to the tools sub-help.
+            self.current_context = "tools"
+            if args:
+                self.cmd_tools(*args)
+            else:
+                self.rich_console.print(
+                    "Usage: tools <list|mcp|load> [args]  (try `help tools`)"
+                )
             return True
 
         elif cmd == "mcp":
+            self.current_context = "mcp"
             self.cmd_mcp(*args)
             return True
 
@@ -2796,6 +3579,19 @@ class WintermuteConsole:
 
         return False
 
+    def _render_prompt(self) -> HTML:
+        """Build the prompt-toolkit HTML string from ``self.current_context``.
+
+        Uses bold for the deck name and a coloured tag for the active
+        sub-menu. When no menu is active we render the bare deck prompt
+        so the user can tell at a glance whether they are at the root.
+        """
+        if self.current_context:
+            return HTML(
+                f"<b>onoSendai</b> <ansicyan>[{self.current_context}]</ansicyan> &gt; "
+            )
+        return HTML("<b>onoSendai</b> &gt; ")
+
     async def run(self) -> None:
         self.display_banner()
 
@@ -2804,7 +3600,9 @@ class WintermuteConsole:
             try:
                 with patch_stdout():
                     user_input = await self.session.prompt_async(
-                        self, completer=completer, style=self.style
+                        self._render_prompt,
+                        completer=completer,
+                        style=self.style,
                     )
 
                 if not user_input.strip():
@@ -2821,7 +3619,7 @@ class WintermuteConsole:
                     self.cmd_back()
                     continue
                 elif cmd == "help":
-                    self.show_commands(args[0] if args else None)
+                    self.cmd_help(args)
                     continue
                 elif cmd == "status":
                     self.cmd_status()

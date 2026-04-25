@@ -30,7 +30,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Iterable, List, Protocol, runtime_checkable
 
 from ..ai.json_types import JSONObject
 from ..ai.types import ToolSpec
@@ -102,6 +102,15 @@ class ToolRegistry:
         tool = self._tools[name]
         return tool.handler(args)
 
+    def unregister(self, name: str) -> bool:
+        """Remove a single tool from the registry by name.
+
+        Returns ``True`` if a tool was actually removed, ``False`` if it
+        was already absent. Used by the cartridge manager when unloading
+        a cartridge so its methods stop showing up in the AI tool surface.
+        """
+        return self._tools.pop(name, None) is not None
+
     def get_definitions(self) -> List[Dict[str, Any]]:
         """Convert registered tools to OpenAI-compatible function definitions."""
         definitions = []
@@ -121,6 +130,28 @@ class ToolRegistry:
 
 # Global registry instance
 tools = ToolRegistry()
+
+
+def unregister_tools(names: Iterable[str]) -> int:
+    """Remove the given tool names from the global :data:`tools` registry.
+
+    Counterpart to :func:`wintermute.ai.utils.tool_factory.register_tools` +
+    :meth:`ToolRegistry.register`. Used by
+    :class:`wintermute.cartridges.manager.CartridgeManager` on unload so the
+    AI no longer sees cartridge methods that have been removed from memory.
+
+    Args:
+        names: Iterable of tool names to drop. Names that are already
+            absent are ignored silently.
+
+    Returns:
+        The number of tools actually removed.
+    """
+    removed = 0
+    for name in names:
+        if tools.unregister(name):
+            removed += 1
+    return removed
 
 
 def spec_from_tool(tool: Tool, description: str = "") -> ToolSpec:
