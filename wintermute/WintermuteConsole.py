@@ -39,6 +39,7 @@ from wintermute.cloud.aws import AWSService, AWSUser, IAMRole, IAMUser
 from wintermute.core import Analyst, AWSAccount, Device, Operation, Service, User
 from wintermute.findings import Vulnerability
 from wintermute.hardware import Architecture, Memory, Processor
+from wintermute.integrations.mcp_runtime import MCPClientManager
 from wintermute.peripherals import (
     JTAG,
     TPM,
@@ -116,6 +117,10 @@ class WintermuteConsole:
         self.session: PromptSession[Any] = PromptSession(history=InMemoryHistory())
         self.operation = Operation(operation_name="default")
         self.tools_runtime = ToolsRuntime()
+        # Outbound MCP client manager — owns ~/.wintermute/mcp_servers.json and a
+        # background asyncio loop on a daemon thread. Instantiation is cheap;
+        # the loop only spins up when the operator first runs `mcp start`.
+        self.mcp_manager = MCPClientManager()
 
         # Local context (Cartridge)
         self.context_stack: List[str] = ["wintermute"]
@@ -2303,6 +2308,16 @@ class WintermuteConsole:
                     )
                     for t in raw_tools
                 ]
+                # Critical agentic hook: extend the visible tool surface with
+                # whatever external MCP servers the operator has connected via
+                # `mcp start`. Lets the LLM autonomously call Ghidra / Binary
+                # Ninja / etc. alongside Wintermute's hardware cartridges.
+                try:
+                    tool_specs.extend(self.mcp_manager.get_all_external_tools())
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to fetch external MCP tools for chat: %s", exc
+                    )
 
                 messages = [Message(role="user", content=prompt)]
 
@@ -2570,6 +2585,117 @@ class WintermuteConsole:
             except Exception as e:
                 self.rich_console.print(f"[red][!] Error loading tool: {e}[/]")
 
+    # --- MCP Client Manager Sub-menu ---
+
+    def cmd_mcp(self, *args: str) -> None:
+        """Dispatcher for `mcp register|list|delete|start|stop|status`."""
+        if not args:
+            self.rich_console.print(
+                "Usage: mcp <register|list|delete|start|stop|status> [...]"
+            )
+            return
+
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "register":
+            if len(rest) < 2:
+                self.rich_console.print(
+                    "Usage: mcp register <name> <command> [arg ...]"
+                )
+                return
+            name, command = rest[0], rest[1]
+            extra = list(rest[2:])
+            try:
+                defn = self.mcp_manager.register_server(
+                    name=name, command=command, args=extra
+                )
+            except Exception as exc:
+                self.rich_console.print(
+                    f"[red][!] Failed to register MCP server {name!r}: {exc}[/]"
+                )
+                return
+            self.rich_console.print(
+                f"[*] Registered MCP server [bold green]{defn.name}[/] "
+                f"({defn.command} {' '.join(defn.args)})"
+            )
+            self.rich_console.print(f"    Saved to {self.mcp_manager.config_path}")
+
+        elif sub == "list":
+            registered = self.mcp_manager.list_registered()
+            if not registered:
+                self.rich_console.print(
+                    "[yellow]No MCP servers registered. "
+                    "Add one with `mcp register <name> <command> [args...]`.[/]"
+                )
+                return
+            table = Table(title="🔌 Registered MCP Servers", border_style="bright_blue")
+            table.add_column("Name", style="cyan")
+            table.add_column("Command", style="magenta")
+            table.add_column("Args", style="white")
+            for defn in registered:
+                table.add_row(defn.name, defn.command, " ".join(defn.args))
+            self.rich_console.print(table)
+
+        elif sub == "delete":
+            if len(rest) != 1:
+                self.rich_console.print("Usage: mcp delete <name>")
+                return
+            name = rest[0]
+            removed = self.mcp_manager.delete_server(name)
+            if removed:
+                self.rich_console.print(f"[*] Removed MCP server [bold green]{name}[/]")
+            else:
+                self.rich_console.print(
+                    f"[yellow]No registered MCP server named {name!r}.[/]"
+                )
+
+        elif sub == "start":
+            if len(rest) != 1:
+                self.rich_console.print("Usage: mcp start <name>")
+                return
+            name = rest[0]
+            # start_server returns immediately with a status string; the
+            # actual stdio handshake happens on the manager's daemon
+            # thread. Use `mcp status` to confirm the connection is up.
+            message = self.mcp_manager.start_server(name)
+            self.rich_console.print(f"[*] {message}")
+
+        elif sub == "stop":
+            if len(rest) != 1:
+                self.rich_console.print("Usage: mcp stop <name>")
+                return
+            name = rest[0]
+            message = self.mcp_manager.stop_server(name)
+            self.rich_console.print(f"[*] {message}")
+
+        elif sub == "status":
+            running = self.mcp_manager.get_status()
+            if not running:
+                self.rich_console.print("[yellow]No MCP servers currently running.[/]")
+                return
+            table = Table(title="📡 Running MCP Servers", border_style="bright_blue")
+            table.add_column("Name", style="cyan")
+            table.add_column("PID", style="white", justify="right")
+            table.add_column("Command", style="magenta")
+            table.add_column("Args", style="white")
+            table.add_column("Tools", style="green", justify="right")
+            for sess in running:
+                table.add_row(
+                    sess["name"],
+                    str(sess.get("pid", "")),
+                    sess["command"],
+                    " ".join(sess["args"]),
+                    str(sess["tools"]),
+                )
+            self.rich_console.print(table)
+
+        else:
+            self.rich_console.print(
+                f"[red][!] Unknown mcp subcommand: {sub!r}[/]\n"
+                "Usage: mcp <register|list|delete|start|stop|status> [...]"
+            )
+
     # --- Main Loop ---
 
     async def _dispatch_main_commands(self, cmd: str, args: List[str]) -> bool:
@@ -2647,6 +2773,10 @@ class WintermuteConsole:
 
         elif cmd == "tools" and args:
             self.cmd_tools(*args)
+            return True
+
+        elif cmd == "mcp":
+            self.cmd_mcp(*args)
             return True
 
         # Dynamic Cartridge Commands (only if loaded)

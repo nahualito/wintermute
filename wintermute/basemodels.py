@@ -306,6 +306,8 @@ class PeripheralType(Enum):
     TPM = 0x0A
     USB = 0x0B
     PCIe = 0x0C
+    CAN = 0x0D
+    SFP = 0x0E
 
 
 class Peripheral(BaseModel):

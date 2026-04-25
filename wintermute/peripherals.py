@@ -268,6 +268,291 @@ class JTAG(Peripheral):
         log.info(f"Initialized JTAG peripheral {name}")
 
 
+class I2C(Peripheral):
+    """Class that defines the I2C (Inter-Integrated Circuit) interface.
+
+    I2C is a multi-master, multi-slave, packet-switched, single-ended, serial
+    communication bus. It uses two bidirectional open-collector or open-drain
+    lines, SDA (Serial Data) and SCL (Serial Clock), pulled up with resistors.
+
+    Examples:
+        >>> pins = {"sda": "P1", "scl": "P2", "gnd": "GND", "vcc": "VCC"}
+        >>> i2c = I2C(name="eeprom", pins=pins, address=0x50, clock_speed=400000)
+        >>> print(i2c)
+        name='eeprom' pins={'sda': 'P1', 'scl': 'P2', 'gnd': 'GND', 'vcc': 'VCC'} pType=<PeripheralType.I2C: 8>
+        >>> print(hex(i2c.address), i2c.clock_speed)
+        0x50 400000
+
+    Attributes:
+        name (str): Name of the peripheral.
+        pins (Dict[Any, Any]): Dictionary of pin names to their values, expects
+            keys ``sda`` and ``scl``.
+        pType (PeripheralType): Type of the peripheral, defaults to
+            ``PeripheralType.I2C``.
+        address (int): 7-bit (or 10-bit) I2C slave address of the target device.
+            Defaults to 0.
+        clock_speed (int): Bus clock frequency in Hz. Common values: 100000
+            (standard mode), 400000 (fast mode), 1000000 (fast-mode plus),
+            3400000 (high-speed mode). Defaults to 100000.
+    """
+
+    def __init__(
+        self,
+        device_path: str = "",
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.I2C,
+        address: int = 0,
+        clock_speed: int = 100000,
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
+    ) -> None:
+        """Initialize an I2C peripheral.
+
+        Args:
+            device_path (str): Path to the I2C bus device (e.g., ``/dev/i2c-1``).
+            name (str): Name of the I2C peripheral.
+            pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
+                Expected keys include ``sda`` and ``scl``.
+            pType (PeripheralType): Peripheral type, defaults to
+                ``PeripheralType.I2C``.
+            address (int): I2C slave address of the target device. Defaults to 0.
+            clock_speed (int): Bus clock frequency in Hz. Defaults to 100000.
+            vulnerabilities: Optional list of known vulnerabilities.
+        """
+        self.pType = pType
+        self.address = address
+        self.clock_speed = clock_speed
+
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
+        log.info(
+            f"Initialized I2C peripheral {name} at address {hex(address)} with clock {clock_speed} Hz"
+        )
+
+
+class SPI(Peripheral):
+    """Class that defines the SPI (Serial Peripheral Interface) interface.
+
+    SPI is a synchronous, full-duplex, master-slave-based serial communication
+    bus. It uses four signals: MISO (Master In Slave Out), MOSI (Master Out
+    Slave In), SCLK (Serial Clock), and CS (Chip Select / Slave Select).
+
+    Examples:
+        >>> pins = {
+        ...     "miso": "P1",
+        ...     "mosi": "P2",
+        ...     "sclk": "P3",
+        ...     "cs": "P4",
+        ...     "gnd": "GND",
+        ...     "vcc": "VCC",
+        ... }
+        >>> spi = SPI(name="flash", pins=pins, mode=0, clock_speed=10000000)
+        >>> print(spi)
+        name='flash' pins={'miso': 'P1', 'mosi': 'P2', 'sclk': 'P3', 'cs': 'P4', 'gnd': 'GND', 'vcc': 'VCC'} pType=<PeripheralType.SPI: 9>
+        >>> print(spi.mode, spi.clock_speed, spi.bit_order)
+        0 10000000 MSB
+
+    Attributes:
+        name (str): Name of the peripheral.
+        pins (Dict[Any, Any]): Dictionary of pin names to their values, expects
+            keys ``miso``, ``mosi``, ``sclk``, and ``cs``.
+        pType (PeripheralType): Type of the peripheral, defaults to
+            ``PeripheralType.SPI``.
+        mode (int): SPI mode, an integer in the range 0-3 selecting the clock
+            polarity (CPOL) and clock phase (CPHA) combination.
+        clock_speed (int): Bus clock frequency in Hz.
+        bit_order (Literal["MSB", "LSB"]): Bit transmission order, either
+            ``"MSB"`` (most significant bit first) or ``"LSB"`` (least
+            significant bit first). Defaults to ``"MSB"``.
+    """
+
+    def __init__(
+        self,
+        device_path: str = "",
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.SPI,
+        mode: int = 0,
+        clock_speed: int = 1000000,
+        bit_order: Literal["MSB", "LSB"] = "MSB",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
+    ) -> None:
+        """Initialize an SPI peripheral.
+
+        Args:
+            device_path (str): Path to the SPI bus device (e.g., ``/dev/spidev0.0``).
+            name (str): Name of the SPI peripheral.
+            pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
+                Expected keys include ``miso``, ``mosi``, ``sclk``, and ``cs``.
+            pType (PeripheralType): Peripheral type, defaults to
+                ``PeripheralType.SPI``.
+            mode (int): SPI mode (0-3). Defaults to 0.
+            clock_speed (int): Bus clock frequency in Hz. Defaults to 1000000.
+            bit_order (Literal["MSB", "LSB"]): Bit transmission order. Defaults
+                to ``"MSB"``.
+            vulnerabilities: Optional list of known vulnerabilities.
+        """
+        self.pType = pType
+        self.mode = mode
+        self.clock_speed = clock_speed
+        self.bit_order = bit_order
+
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
+        log.info(
+            f"Initialized SPI peripheral {name} in mode {mode} with clock {clock_speed} Hz, bit order {bit_order}"
+        )
+
+
+class CAN(Peripheral):
+    """Class that defines the CAN (Controller Area Network) bus interface.
+
+    CAN is a robust, message-based, multi-master serial bus standard widely
+    used in automotive, industrial, and embedded applications. It uses a
+    differential pair (CAN_H / CAN_L) but most controllers expose digital
+    TX / RX lines toward an external transceiver.
+
+    Examples:
+        >>> pins = {"can_tx": "P1", "can_rx": "P2", "gnd": "GND", "vcc": "VCC"}
+        >>> can = CAN(name="powertrain", pins=pins, baudrate=500000)
+        >>> print(can)
+        name='powertrain' pins={'can_tx': 'P1', 'can_rx': 'P2', 'gnd': 'GND', 'vcc': 'VCC'} pType=<PeripheralType.CAN: 13>
+        >>> print(can.baudrate, can.extended_id)
+        500000 False
+
+    Attributes:
+        name (str): Name of the peripheral.
+        pins (Dict[Any, Any]): Dictionary of pin names to their values, expects
+            keys ``can_tx`` and ``can_rx``.
+        pType (PeripheralType): Type of the peripheral, defaults to
+            ``PeripheralType.CAN``.
+        baudrate (int): Bus bit rate in bits per second. Common values: 125000,
+            250000, 500000 (most common automotive), 1000000.
+        extended_id (bool): Whether to use 29-bit extended identifiers (CAN 2.0B)
+            instead of the 11-bit standard identifiers (CAN 2.0A). Defaults to
+            False.
+    """
+
+    def __init__(
+        self,
+        device_path: str = "can0",
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.CAN,
+        baudrate: int = 500000,
+        extended_id: bool = False,
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
+    ) -> None:
+        """Initialize a CAN peripheral.
+
+        Args:
+            device_path (str): Path or name of the CAN interface (e.g., ``can0``).
+            name (str): Name of the CAN peripheral.
+            pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
+                Expected keys include ``can_tx`` and ``can_rx``.
+            pType (PeripheralType): Peripheral type, defaults to
+                ``PeripheralType.CAN``.
+            baudrate (int): Bus bit rate in bps. Defaults to 500000.
+            extended_id (bool): Use 29-bit extended identifiers. Defaults to False.
+            vulnerabilities: Optional list of known vulnerabilities.
+        """
+        self.pType = pType
+        self.baudrate = baudrate
+        self.extended_id = extended_id
+
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
+        log.info(
+            f"Initialized CAN peripheral {name} at {baudrate} bps (extended_id={extended_id})"
+        )
+
+
+class SFP(Peripheral):
+    """Class that defines an SFP (Small Form-factor Pluggable) transceiver.
+
+    SFP modules are hot-pluggable network interface transceivers used in
+    Ethernet, Fibre Channel, and SONET/SDH equipment. They expose low-speed
+    management signals (TX_FAULT, TX_DISABLE, MOD_DEF, RX_LOS) plus the
+    high-speed differential data pairs.
+
+    Examples:
+        >>> pins = {
+        ...     "tx_fault": "P1",
+        ...     "tx_disable": "P2",
+        ...     "mod_def": "P3",
+        ...     "rx_los": "P4",
+        ...     "gnd": "GND",
+        ...     "vcc": "VCC",
+        ... }
+        >>> sfp = SFP(
+        ...     name="uplink0",
+        ...     pins=pins,
+        ...     form_factor="SFP+",
+        ...     wavelength=1310,
+        ...     media="fiber",
+        ... )
+        >>> print(sfp)
+        name='uplink0' pins={'tx_fault': 'P1', 'tx_disable': 'P2', 'mod_def': 'P3', 'rx_los': 'P4', 'gnd': 'GND', 'vcc': 'VCC'} pType=<PeripheralType.SFP: 14>
+        >>> print(sfp.form_factor, sfp.wavelength, sfp.media)
+        SFP+ 1310 fiber
+
+    Attributes:
+        name (str): Name of the peripheral.
+        pins (Dict[Any, Any]): Dictionary of pin names to their values, expects
+            keys ``tx_fault``, ``tx_disable``, ``mod_def``, and ``rx_los``.
+        pType (PeripheralType): Type of the peripheral, defaults to
+            ``PeripheralType.SFP``.
+        form_factor (str): Module form factor, e.g., ``"SFP"``, ``"SFP+"``,
+            ``"QSFP"``, ``"QSFP+"``, ``"QSFP28"``.
+        wavelength (int): Optical wavelength in nanometers (e.g., 850, 1310,
+            1550). Use 0 for copper / direct attach modules.
+        media (str): Physical media type, e.g., ``"fiber"`` or ``"copper"``.
+    """
+
+    def __init__(
+        self,
+        device_path: str = "",
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.SFP,
+        form_factor: str = "SFP",
+        wavelength: int = 850,
+        media: str = "fiber",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
+    ) -> None:
+        """Initialize an SFP peripheral.
+
+        Args:
+            device_path (str): Path or identifier of the SFP cage / interface.
+            name (str): Name of the SFP peripheral.
+            pins (Dict[Any, Any]): Dictionary mapping pin names to their values.
+                Expected keys include ``tx_fault``, ``tx_disable``, ``mod_def``,
+                and ``rx_los``.
+            pType (PeripheralType): Peripheral type, defaults to
+                ``PeripheralType.SFP``.
+            form_factor (str): Module form factor (``"SFP"``, ``"SFP+"``,
+                ``"QSFP"``, etc.). Defaults to ``"SFP"``.
+            wavelength (int): Optical wavelength in nanometers. Defaults to 850.
+            media (str): Physical media type (``"fiber"`` or ``"copper"``).
+                Defaults to ``"fiber"``.
+            vulnerabilities: Optional list of known vulnerabilities.
+        """
+        self.pType = pType
+        self.form_factor = form_factor
+        self.wavelength = wavelength
+        self.media = media
+
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
+        log.info(
+            f"Initialized SFP peripheral {name} ({form_factor}, {wavelength}nm, {media})"
+        )
+
+
 class Bluetooth(Peripheral):
     """Class that defines the Bluetooth interface"""
 

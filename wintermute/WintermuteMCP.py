@@ -60,14 +60,15 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import io
 import json
 import logging
+import os
 import re
 import sys
-import io
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, List
 
 from mcp.server.fastmcp import FastMCP
 
@@ -78,6 +79,7 @@ from wintermute.ai.bootstrap import init_router
 from wintermute.ai.provider import Router, llms
 from wintermute.ai.tools_runtime import tools as global_tool_registry
 from wintermute.ai.use import simple_chat
+from wintermute.ai.utils.tool_factory import register_tools
 from wintermute.backends.json_storage import JsonFileBackend
 from wintermute.cloud.aws import AWSAccount, AWSServiceType
 from wintermute.core import (
@@ -105,6 +107,140 @@ log = logging.getLogger(__name__)
 # MCP Server instance — tools are registered via decorators below.
 # ---------------------------------------------------------------------------
 mcp = FastMCP("WintermuteMCP")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HARDWARE CARTRIDGE EXPOSURE
+# ═══════════════════════════════════════════════════════════════════════════
+# Expose the Phase 2/3 cartridges (TPM, JTAG, firmware analysis) as MCP tools.
+# Each cartridge is instantiated defensively — missing kernel devices, absent
+# `openocd` binaries, or a JTAG host that is offline must NOT crash the MCP
+# server import, since the rest of the surface (operations, vulns, AI router)
+# remains useful regardless. Methods are also fed to ``register_tools`` so the
+# internal Wintermute tool registry mirrors what the MCP transport exposes.
+#
+# Environment variables (read once at module import):
+#   WINTERMUTE_TPM_DEVICE  — path to TPM character device (default /dev/tpm0).
+#   WINTERMUTE_JTAG_HOST   — OpenOCD telnet host (default localhost).
+#   WINTERMUTE_JTAG_PORT   — OpenOCD telnet port (default 4444).
+
+
+def _build_hardware_methods() -> List[Callable[..., Any]]:
+    """Instantiate each cartridge in isolation and collect its safe methods.
+
+    Cartridges that fail to construct (kernel devices missing, openocd not
+    installed, etc.) are logged and skipped so the rest of the MCP surface
+    keeps loading.
+    """
+    methods: List[Callable[..., Any]] = []
+
+    # --- TPM 2.0 ----------------------------------------------------------
+    try:
+        from wintermute.cartridges.tpm20 import TPMTransport, tpm20
+
+        tpm_device = os.environ.get("WINTERMUTE_TPM_DEVICE", "/dev/tpm0")
+        tpm_instance = tpm20(transport=TPMTransport(device_path=tpm_device))
+        # Only the dict-returning audit methods are safe to surface as MCP
+        # tools. The byte-returning primitives (get_random, nv_read, …) need
+        # explicit hex shims before they are LLM-friendly.
+        methods.extend(
+            [
+                tpm_instance.test_pcr_state,
+                tpm_instance.test_da_lockout,
+            ]
+        )
+    except Exception as exc:
+        log.warning("TPM cartridge unavailable, skipping: %s", exc)
+
+    # --- JTAG / OpenOCD --------------------------------------------------
+    try:
+        from wintermute.cartridges.jtag import (
+            JTAGCartridge,
+            OpenOCDConfig,
+            OpenOCDTransport,
+        )
+
+        jtag_host = os.environ.get("WINTERMUTE_JTAG_HOST", "localhost")
+        jtag_port = int(os.environ.get("WINTERMUTE_JTAG_PORT", "4444"))
+        jtag_transport = OpenOCDTransport(OpenOCDConfig(host=jtag_host, port=jtag_port))
+        jtag_instance = JTAGCartridge(transport=jtag_transport)
+        methods.extend(
+            [
+                jtag_instance.halt_core,
+                jtag_instance.resume_core,
+                jtag_instance.read_registers,
+                jtag_instance.read_memory,
+                jtag_instance.write_memory,
+                jtag_instance.dump_firmware,
+            ]
+        )
+    except Exception as exc:
+        log.warning("JTAG cartridge unavailable, skipping: %s", exc)
+
+    # --- Firmware analysis (stateless) -----------------------------------
+    try:
+        from wintermute.cartridges.firmware_analysis import (
+            FirmwareAnalysisCartridge,
+        )
+
+        firmware = FirmwareAnalysisCartridge()
+        methods.extend(
+            [
+                firmware.analyze_entropy,
+                firmware.scan_for_secrets,
+                firmware.extract_strings,
+                firmware.find_base_address,
+            ]
+        )
+    except Exception as exc:
+        log.warning("Firmware analysis cartridge unavailable, skipping: %s", exc)
+
+    return methods
+
+
+def _bind_hardware_cartridges() -> List[str]:
+    """Register cartridge methods internally and bind them to the MCP server.
+
+    Returns the list of tool names that were successfully bound. Any single
+    failure during MCP binding is logged so a flaky FastMCP introspection on
+    one method cannot mask the rest.
+    """
+    methods = _build_hardware_methods()
+    if not methods:
+        return []
+
+    # 1. Generate Wintermute Tool descriptors (input/output JSON schemas) and
+    #    feed them into the internal global registry. This keeps the LLM
+    #    tool-calling pipeline (`tool_calling_chat`) in sync with what MCP
+    #    clients see externally.
+    try:
+        wintermute_tools = register_tools(methods)
+    except Exception as exc:
+        log.error("Failed to generate cartridge tool schemas: %s", exc)
+        return []
+
+    bound: List[str] = []
+    for tool, fn in zip(wintermute_tools, methods):
+        try:
+            global_tool_registry.register(tool)
+        except Exception as exc:
+            log.warning("Skipping internal registration for %s: %s", tool.name, exc)
+
+        # 2. Bind to the FastMCP surface so external clients can discover and
+        #    execute the same capability. FastMCP introspects the bound
+        #    method's type hints to derive its JSON schema.
+        description = (fn.__doc__ or tool.description or "").strip()
+        try:
+            mcp.add_tool(fn, name=tool.name, description=description)
+            bound.append(tool.name)
+        except Exception as exc:
+            log.warning("Failed to bind %s to MCP server: %s", tool.name, exc)
+
+    log.info("Hardware cartridges exposed via MCP: %s", bound)
+    return bound
+
+
+_HARDWARE_TOOLS_BOUND: List[str] = _bind_hardware_cartridges()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2285,8 +2421,6 @@ async def execute_depthcharge_catalog(
     Returns:
         JSON summary of discovered commands and danger analysis.
     """
-    import io
-    from contextlib import redirect_stdout, redirect_stderr
     from wintermute.backends.depthcharge import DepthchargePeripheralAgent
     from wintermute.basemodels import Peripheral
 
@@ -2294,14 +2428,14 @@ async def execute_depthcharge_catalog(
     try:
         # Create a memory buffer to swallow the rogue print statements
         f = io.StringIO()
-        
+
         # Everything inside this 'with' block has its terminal output silenced
         with redirect_stdout(f), redirect_stderr(f):
             agent = DepthchargePeripheralAgent(peripheral=periph)  # type: ignore[arg-type]
             result = agent.catalog_commands_and_flag(
                 addVulns=add_vulns if add_vulns is not None else True
             )
-            
+
         # Once we exit the 'with' block, standard output is restored safely!
         return json.dumps(result, indent=2, default=str)
     except Exception as e:

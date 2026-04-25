@@ -30,6 +30,31 @@ from pydantic import create_model
 
 from wintermute.ai.json_types import JSONObject
 from wintermute.ai.tools_runtime import Tool
+from wintermute.utils.blob_manager import WorkspaceManager, get_default_workspace
+
+# Threshold (in bytes) above which a tool's return value is offloaded to the
+# workspace instead of being shipped back to the LLM verbatim. Picked to be
+# small enough that even chatty firmware tools rarely waste context, but large
+# enough that ordinary string returns (status messages, short hex dumps) are
+# left untouched.
+LARGE_PAYLOAD_THRESHOLD_BYTES = 1024
+
+
+def _maybe_offload_payload(
+    value: Any, workspace: WorkspaceManager
+) -> JSONObject | None:
+    """Return a blob descriptor if ``value`` should be offloaded, else None.
+
+    Triggers on raw bytes-like objects of any size and on strings whose UTF-8
+    encoding exceeds ``LARGE_PAYLOAD_THRESHOLD_BYTES``. Anything else is left
+    for the normal ``{"result": value}`` wrapping path.
+    """
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return workspace.save_blob(value)
+    if isinstance(value, str):
+        if len(value.encode("utf-8")) > LARGE_PAYLOAD_THRESHOLD_BYTES:
+            return workspace.save_blob(value, suffix=".txt")
+    return None
 
 
 def function_to_tool(func: Callable[..., Any]) -> Tool:
@@ -79,6 +104,13 @@ def function_to_tool(func: Callable[..., Any]) -> Tool:
 
         # Call the actual function with unpacked arguments
         result = func(**validated_params.model_dump())
+
+        # Intercept oversized payloads (raw bytes, multi-KB strings) before
+        # they reach the LLM. Tools writing firmware dumps can therefore just
+        # `return raw_flash_bytes` and the descriptor is what the model sees.
+        offloaded = _maybe_offload_payload(result, get_default_workspace())
+        if offloaded is not None:
+            return offloaded
 
         # Pack the result into a JSON object matching our output schema
         # Note: If your function already returns a dict, you might want logic here
