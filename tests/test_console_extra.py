@@ -60,7 +60,21 @@ def test_cmd_use_run_cartridge(
     # Use a real module that exists to avoid reload() issues
     import wintermute.core as mock_mod
 
-    with patch("importlib.import_module", return_value=mock_mod):
+    # The legacy `_cmd_use_load` calls ``importlib.reload(module)``. With
+    # the import_module patch below, ``module`` resolves to
+    # ``wintermute.core``; reloading it would re-create every domain class
+    # (Operation, TestPlan, TestCase, ...) and break ``isinstance`` for
+    # other tests that share the live class objects. Stubbing reload to a
+    # no-op keeps the module identity stable across the suite.
+    #
+    # Patch order matters: the second `patch()` resolves its target via
+    # ``importlib.import_module``; if the first patch were already active,
+    # mock would look for ``reload`` on the patched return value (the core
+    # module) and fail. Entering the reload patch first sidesteps that.
+    with (
+        patch("importlib.reload", side_effect=lambda m: m),
+        patch("importlib.import_module", return_value=mock_mod),
+    ):
         console.available_cartridges = ["core"]
 
         # Mock class finding using monkeypatch instead of direct assignment

@@ -91,9 +91,11 @@ async def test_dispatch_sets_context_for_operation(console: WintermuteConsole) -
 
 
 @pytest.mark.asyncio
-async def test_dispatch_sets_context_for_bare_add(console: WintermuteConsole) -> None:
-    await console._dispatch_main_commands("add", [])
-    assert console.current_context == "add"
+async def test_dispatch_sets_context_for_devices(console: WintermuteConsole) -> None:
+    """The legacy `add` menu is gone — top-level domain commands set the
+    matching context instead."""
+    await console._dispatch_main_commands("devices", [])
+    assert console.current_context == "devices"
 
 
 def test_back_resets_current_context(console: WintermuteConsole) -> None:
@@ -110,13 +112,15 @@ def test_back_resets_current_context(console: WintermuteConsole) -> None:
 def test_help_main_menu_lists_top_level_commands(console: WintermuteConsole) -> None:
     console.cmd_help([])
     out = _stdout(console)
-    # `use` was retired in the cartridge-manager overhaul; the main menu
-    # now advertises `cartridges` instead.
+    # `use` and the generic `add` menu were both retired. Operators now
+    # see the domain routers (devices / analysts / users) directly.
     for token in (
         "mcp",
         "tools",
         "operation",
-        "add",
+        "devices",
+        "analysts",
+        "users",
         "show",
         "cartridges",
         "ai",
@@ -232,14 +236,14 @@ def test_add_analyst_with_quoted_name(console: WintermuteConsole) -> None:
 
 
 def test_add_analyst_via_dispatcher(console: WintermuteConsole) -> None:
-    """End-to-end: the run() loop joins args back together; cmd_add re-shlexes
-    and the quotes survive the round trip."""
+    """End-to-end: domain routing of `analysts add ...` joins args back,
+    re-shlexes them, and the quotes survive the round trip."""
     import asyncio
 
     async def _go() -> None:
         await console._dispatch_main_commands(
-            "add",
-            ["analyst", '"Foo', 'Bar"', "foobar", "foobar@x.com"],
+            "analysts",
+            ["add", '"Foo', 'Bar"', "foobar", "foobar@x.com"],
         )
 
     asyncio.run(_go())
@@ -248,11 +252,24 @@ def test_add_analyst_via_dispatcher(console: WintermuteConsole) -> None:
     assert analysts[0].name == "Foo Bar"
 
 
-def test_add_analyst_wrong_arg_count(console: WintermuteConsole) -> None:
+def test_add_analyst_partial_args_drops_into_builder(
+    console: WintermuteConsole,
+) -> None:
+    """Partial args no longer hard-reject — the operator drops into the
+    builder with what they typed already pre-populated. They can finish
+    interactively (or `back` out)."""
     console.cmd_add("analyst onlyone")
-    out = _stdout(console)
-    assert "Usage" in out
+    # Builder is now active, pre-populated with the single positional arg
+    # against the ordered field list (`name` first).
+    assert len(console.builder_stack) == 1
+    builder = console.builder_stack[-1]
+    assert builder.entity_name == "analyst"
+    assert builder.properties.get("name") == "onlyone"
+    # No partial analyst leaked into the operation yet.
     assert console.active_operation.analysts == []
+    # The user gets a hint about how many more fields are needed.
+    out = _stdout(console)
+    assert "Pre-populated" in out
 
 
 def test_add_device_with_default_ip(console: WintermuteConsole) -> None:

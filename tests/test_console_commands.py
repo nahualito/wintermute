@@ -175,9 +175,13 @@ async def test_console_global_command_fallback() -> None:
         # 'status' is in global navigation
         pass
 
-    # Let's test _dispatch_main_commands directly for 'add'
+    # Let's test _dispatch_main_commands directly for the new `devices`
+    # router. Bare `devices add` (no inline args) routes to the empty
+    # interactive builder via cmd_add_enter("device") — same end state
+    # as the legacy `add device` dispatch contract this test used to
+    # exercise.
     with patch.object(console, "cmd_add_enter") as mock_add:
-        handled = await console._dispatch_main_commands("add", ["device"])
+        handled = await console._dispatch_main_commands("devices", ["add"])
         assert handled is True
         mock_add.assert_called_once_with("device")
 

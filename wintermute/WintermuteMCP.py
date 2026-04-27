@@ -1562,6 +1562,75 @@ async def update_test_run_status(
 
 
 @mcp.tool()
+async def add_note_to_test_run(test_run_id: str, note: str) -> str:
+    """Append a free-text note to an existing TestCaseRun.
+
+    The ``notes`` field on :class:`TestCaseRun` is a single string; this
+    tool appends ``note`` to it on a fresh line so each note remains
+    legible in the eventual report.
+
+    Args:
+        test_run_id: Registry ID of the target TestCaseRun (as returned by
+            :func:`generate_test_runs` or :func:`list_active_objects`).
+        note: Text to append. Multi-line notes are honored verbatim.
+
+    Returns:
+        JSON object with ``run_id`` and the post-append ``notes_length``,
+        or ``{"error": "..."}`` on registry miss.
+    """
+    try:
+        run: TestCaseRun = _require(test_run_id, TestCaseRun, "TestCaseRun")
+    except (ValueError, TypeError) as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+    run.notes = f"{run.notes}\n{note}" if run.notes else note
+    return json.dumps(
+        {"run_id": run.run_id, "notes_length": len(run.notes)},
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def add_vulnerability_to_test_run(
+    test_run_id: str,
+    title: str,
+    cvss: int,
+    description: str = "",
+) -> str:
+    """Attach a new :class:`Vulnerability` directly to a TestCaseRun's
+    ``findings`` list.
+
+    This is the run-level counterpart to :func:`add_vulnerability` (which
+    attaches to a Service). Use it when the finding came out of a specific
+    test execution and should travel with that run for reporting.
+
+    Args:
+        test_run_id: Registry ID of the target TestCaseRun.
+        title: Short human-readable label for the vulnerability.
+        cvss: CVSS score as an integer (the framework's existing field
+            type — pass the rounded score).
+        description: Optional longer write-up of the issue.
+
+    Returns:
+        JSON object with ``run_id``, ``vuln_id`` (auto-generated UUID),
+        and ``findings_count`` after the append, or ``{"error": "..."}``.
+    """
+    try:
+        run: TestCaseRun = _require(test_run_id, TestCaseRun, "TestCaseRun")
+    except (ValueError, TypeError) as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+    vuln = Vulnerability(title=title, cvss=cvss, description=description)
+    run.findings.append(vuln)
+    return json.dumps(
+        {
+            "run_id": run.run_id,
+            "vuln_id": vuln.vuln_id,
+            "findings_count": len(run.findings),
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
 async def get_test_execution_status(operation_id: str) -> str:
     """Generate a status report of all test runs in an Operation.
 

@@ -8,13 +8,14 @@ A Metasploit-style REPL using prompt-toolkit and rich.
 import asyncio
 import importlib
 import inspect
+import json
 import logging
 import os
 import re
 import shlex
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, ClassVar, Dict, List, Optional, Type
 
 from prompt_toolkit import HTML, PromptSession
 from prompt_toolkit.completion import NestedCompleter
@@ -36,7 +37,18 @@ from wintermute.ai.utils.tool_factory import register_tools
 from wintermute.backends.json_storage import JsonFileBackend
 from wintermute.basemodels import CloudAccount
 from wintermute.cloud.aws import AWSService, AWSUser, IAMRole, IAMUser
-from wintermute.core import Analyst, AWSAccount, Device, Operation, Service, User
+from wintermute.core import (
+    Analyst,
+    AWSAccount,
+    Device,
+    Operation,
+    RunStatus,
+    Service,
+    TestCase,
+    TestCaseRun,
+    TestPlan,
+    User,
+)
 from wintermute.findings import Vulnerability
 from wintermute.hardware import Architecture, Memory, Processor
 from wintermute.integrations.mcp_runtime import MCPClientManager
@@ -102,10 +114,16 @@ class BuilderContext:
         entity_name: str,
         entity_class: Optional[Type[Any]] = None,
         parent_list_name: Optional[str] = None,
+        target_collection: Optional[List[Any]] = None,
     ) -> None:
         self.entity_name = entity_name
         self.entity_class = entity_class
         self.parent_list_name = parent_list_name
+        # Live list reference resolved from a schema-driven nested route
+        # (e.g. ``device.peripherals``). When set, ``cmd_builder_save``
+        # appends the constructed object straight to this list instead of
+        # routing through one of the operation-level convenience methods.
+        self.target_collection: Optional[List[Any]] = target_collection
         self.properties: Dict[str, Any] = {}
         # Store original object reference for edit mode
         self._original_object: Any | None = None
@@ -215,6 +233,20 @@ class WintermuteConsole:
                 "separator": "ansicyan",
             }
         )
+
+        # Local AI tools — bound to *this* console's active_operation so the
+        # `ai chat` flow can list / inspect / mutate test runs without going
+        # through the MCP ObjectRegistry. Registered into the global tool
+        # registry so `tool_calling_chat` picks them up on the next request.
+        for _ai_tool in register_tools(
+            [
+                self.ai_list_test_runs,
+                self.ai_get_run_details,
+                self.ai_update_run_status,
+                self.ai_add_run_note,
+            ]
+        ):
+            global_tool_registry.register(_ai_tool)
 
     @property
     def active_operation(self) -> Operation:
@@ -1261,43 +1293,124 @@ class WintermuteConsole:
                 )
 
     def cmd_builder_show(self) -> None:
-        """Shows the current builder state."""
+        """Render the active builder as a schema-aware Property/Type/Value
+        table.
+
+        The previous implementation only iterated ``builder.properties``,
+        leaving the operator with no idea what fields the entity even
+        accepted until they guessed a name and watched ``set`` succeed.
+
+        We now introspect ``cls.__init__`` (the closest thing the
+        homegrown ``wintermute.basemodels.BaseModel`` has to a Pydantic
+        ``model_fields``) to enumerate every constructor parameter, with
+        its type annotation. Unset parameters render as ``<unset>`` so
+        the user knows exactly what's available without fishing in
+        source files.
+        """
         if not self.builder_stack:
             self.rich_console.print("[red]No active builder.[/]")
             return
 
         active_builder = self.builder_stack[-1]
         target = active_builder.entity_name
-        table = Table(title=f"Building: {target}")
+        cls = active_builder.entity_class
+
+        table = Table(title=f"Building: {target}", border_style="bright_blue")
         table.add_column("Property", style="cyan")
+        table.add_column("Type", style="magenta")
         table.add_column("Value", style="green")
 
-        for k, v in active_builder.properties.items():
-            # If value is a list (e.g. nested peripherals), show items
-            if isinstance(v, list):
-                if v:
-                    # Detailed list view
-                    items_str = []
-                    for item in v:
-                        if hasattr(item, "name"):
-                            items_str.append(f"- {item.name}")
-                        elif hasattr(item, "hostname"):
-                            items_str.append(f"- {item.hostname}")
-                        elif hasattr(item, "title"):
-                            items_str.append(f"- {item.title}")
-                        elif hasattr(item, "uid"):
-                            items_str.append(f"- {item.uid}")
-                        else:
-                            items_str.append(f"- {str(item)}")
+        # ----- Discover the schema -------------------------------------
+        # Constructor parameters in declaration order are the source of
+        # truth for "what fields does this entity accept?". Anything
+        # already in `properties` but missing from the signature is
+        # appended afterwards so dynamically-added fields stay visible.
+        ordered, types = self._introspect_constructor_fields(cls)
+        for k in active_builder.properties:
+            if k not in ordered:
+                ordered.append(k)
 
-                    val_str = "\n".join(items_str)
-                else:
-                    val_str = "[]"
+        if not ordered:
+            table.add_row("[dim]<no fields available>[/]", "", "")
+            self.rich_console.print(table)
+            return
+
+        for field_name in ordered:
+            type_label = types.get(field_name, "")
+            if field_name in active_builder.properties:
+                value_str = self._format_property_value(
+                    active_builder.properties[field_name]
+                )
             else:
-                val_str = str(v)
-            table.add_row(k, val_str)
+                value_str = "[dim]<unset>[/]"
+            table.add_row(field_name, type_label, value_str)
 
         self.rich_console.print(table)
+
+    @classmethod
+    def _introspect_constructor_fields(
+        cls, target_cls: Optional[type]
+    ) -> tuple[List[str], Dict[str, str]]:
+        """Return ``(ordered_field_names, type_labels)`` for ``target_cls``.
+
+        Walks ``target_cls.__init__``'s signature (the closest thing the
+        homegrown ``wintermute.basemodels.BaseModel`` has to a Pydantic
+        ``model_fields``). Returns empty containers if introspection
+        fails or ``target_cls`` is None — callers decide how to handle
+        the empty case.
+        """
+        ordered: List[str] = []
+        types: Dict[str, str] = {}
+        if target_cls is None:
+            return ordered, types
+        try:
+            sig = inspect.signature(target_cls)
+        except (TypeError, ValueError):
+            return ordered, types
+        for name, param in sig.parameters.items():
+            if name in ("self", "args", "kwargs"):
+                continue
+            if param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+            ordered.append(name)
+            types[name] = cls._format_field_type(param.annotation)
+        return ordered, types
+
+    @staticmethod
+    def _format_field_type(annotation: Any) -> str:
+        """Stringify a constructor parameter annotation for the show table."""
+        if annotation is inspect.Parameter.empty:
+            return "any"
+        if hasattr(annotation, "__name__"):
+            return str(annotation.__name__)  # plain types: str, int, bool, …
+        s = str(annotation).replace("typing.", "").replace("NoneType", "None")
+        if len(s) > 60:
+            s = s[:57] + "…"
+        return s
+
+    @staticmethod
+    def _format_property_value(value: Any) -> str:
+        """Render a *set* property value for the show table."""
+        if isinstance(value, list):
+            if not value:
+                return "[]"
+            items = []
+            for item in value:
+                if hasattr(item, "name"):
+                    items.append(f"- {item.name}")
+                elif hasattr(item, "hostname"):
+                    items.append(f"- {item.hostname}")
+                elif hasattr(item, "title"):
+                    items.append(f"- {item.title}")
+                elif hasattr(item, "uid"):
+                    items.append(f"- {item.uid}")
+                else:
+                    items.append(f"- {item!r}")
+            return "\n".join(items)
+        return str(value)
 
     def cmd_builder_save(self) -> None:
         """Commits the built entity to the operation or parent builder."""
@@ -1355,6 +1468,23 @@ class WintermuteConsole:
                     self.rich_console.print(
                         f"[red][!] Could not instantiate class for {target}.[/]"
                     )
+                    return
+
+                # Schema-driven nested append: when the builder was opened
+                # with a ``target_collection`` (e.g. via
+                # ``peripherals add ...`` inside ``[devices/rasp1]``) the
+                # resolved live list is the source of truth. Append there
+                # and bypass the operation-level convenience routing
+                # entirely so we can support any class registered in a
+                # parent's ``__schema__``.
+                if active_builder.target_collection is not None:
+                    active_builder.target_collection.append(entity_obj)
+                    ident = self._object_identity(entity_obj)
+                    self.rich_console.print(
+                        f"[bold green]✔[/] Saved {type(entity_obj).__name__} "
+                        f"[bold]{ident}[/] to nested collection."
+                    )
+                    self.cmd_back()
                     return
 
                 success = False
@@ -1697,13 +1827,25 @@ class WintermuteConsole:
         entity_type: str,
         cls: Optional[Type[Any]] = None,
         parent_list: Optional[str] = None,
+        target_collection: Optional[List[Any]] = None,
     ) -> None:
-        """Enters the builder context for a specific entity."""
+        """Enter a builder context for a specific entity.
+
+        ``target_collection`` is the *live list reference* the constructed
+        object should be appended to on save. The schema-driven nested
+        editor sets this when a `<cmd> add` is dispatched against a live
+        object's ``__schema__`` field; legacy operation-root paths leave
+        it ``None`` so :meth:`cmd_builder_save` keeps using the existing
+        ``addAnalyst`` / ``addDevice`` / ``addUser`` conveniences.
+        """
         if not cls:
             cls = self.ENTITY_CLASSES.get(entity_type)
 
         ctx = BuilderContext(
-            entity_type, entity_class=cls, parent_list_name=parent_list
+            entity_type,
+            entity_class=cls,
+            parent_list_name=parent_list,
+            target_collection=target_collection,
         )
         self.builder_stack.append(ctx)
         self.rich_console.print(f"[*] Constructing {entity_type} node...")
@@ -1727,10 +1869,31 @@ class WintermuteConsole:
 
         # The new UI menu marker pops one level at a time so deep contexts
         # like `cartridges/tpm20` step through `cartridges` → root cleanly:
-        #   * `cartridges/<name>` → `cartridges`
-        #   * anything else       → root (`""`)
+        #   * `cartridges/<name>`         → `cartridges`
+        #   * `testruns/<run_id>`         → `testruns`
+        #   * `<domain>/.../<key>/<id>`   → `<domain>/...` (one pair off
+        #                                    the tail; supports arbitrary
+        #                                    schema-driven depth)
+        #   * `<domain>/<id>`             → `<domain>`
+        #   * anything else               → root (`""`)
         if self.current_context.startswith("cartridges/"):
             self.current_context = "cartridges"
+        elif self.current_context.startswith("testruns/"):
+            self.current_context = "testruns"
+        elif "/" in self.current_context:
+            parts = self.current_context.split("/")
+            domain = parts[0]
+            if domain not in self._DOMAIN_SPECS:
+                self.current_context = ""
+            elif len(parts) <= 2:
+                # `devices/rasp1` → `devices`.
+                self.current_context = domain
+            else:
+                # Schema-driven deep path: drop the last
+                # `<schema_key>/<id>` pair so each `back` walks one
+                # level toward the root (e.g.
+                # ``devices/rasp1/services/80`` → ``devices/rasp1``).
+                self.current_context = "/".join(parts[:-2])
         else:
             self.current_context = ""
 
@@ -2567,12 +2730,27 @@ class WintermuteConsole:
         cartridge contexts that cmd_help does not own).
         """
         topic = args[0].lower() if args else self.current_context
-        # Deep-context contexts (`cartridges/tpm20`) share the same help
-        # block as the parent menu — the deep shorthand is documented in
-        # the cartridges sub-help.
+        # Deep-context contexts (`cartridges/tpm20`, `testruns/TC-001:once`,
+        # `devices/rasp1`, …) share the same help block as the parent
+        # menu — the deep shorthand is documented in the parent sub-help.
         if topic.startswith("cartridges/"):
             topic = "cartridges"
-        if topic in ("mcp", "tools", "operation", "add", "cartridges"):
+        elif topic.startswith("testruns/"):
+            topic = "testruns"
+        elif "/" in topic:
+            parent, _, _ = topic.partition("/")
+            if parent in self._DOMAIN_SPECS:
+                topic = parent
+        if topic in (
+            "mcp",
+            "tools",
+            "operation",
+            "cartridges",
+            "testruns",
+            "devices",
+            "analysts",
+            "users",
+        ):
             self._render_subhelp(topic)
             return
         if topic:
@@ -2592,11 +2770,26 @@ class WintermuteConsole:
             "operation [create]",
             "Manage operations / persistence (try `help operation`)",
         )
-        table.add_row("add <type> [args]", "Add objects to workspace (try `help add`)")
+        table.add_row(
+            "devices <subcommand>",
+            "Manage Devices in the operation (try `help devices`)",
+        )
+        table.add_row(
+            "analysts <subcommand>",
+            "Manage Analysts in the operation (try `help analysts`)",
+        )
+        table.add_row(
+            "users <subcommand>",
+            "Manage Users in the operation (try `help users`)",
+        )
         table.add_row("show", "Print operation state as a tree")
         table.add_row(
             "cartridges <subcommand>",
             "Dynamic cartridge load/unload/run (try `help cartridges`)",
+        )
+        table.add_row(
+            "testruns <subcommand>",
+            "Test plan loading + run execution (try `help testruns`)",
         )
         table.add_row("ai <cmd>", "AI management and chat (try `help ai`)")
         table.add_row("backend", "Enter backend management menu")
@@ -2700,37 +2893,8 @@ class WintermuteConsole:
             self.rich_console.print(table)
             return
 
-        if topic == "add":
-            table = Table(title="add — Populate Workspace", border_style="bright_blue")
-            table.add_column("Type", style="cyan")
-            table.add_column("Usage", style="magenta")
-            table.add_column("Description", style="white")
-            table.add_row(
-                "analyst",
-                'add analyst "<name>" <userid> <email>',
-                "Append an Analyst (use quotes for multi-word names)",
-            )
-            table.add_row(
-                "device",
-                "add device <hostname> [ip]",
-                "Append a Device",
-            )
-            table.add_row(
-                "user",
-                "add user <uid> <name> <email>",
-                "Append a User",
-            )
-            table.add_row(
-                "service",
-                "add service <device_hostname> <port> <app>",
-                "Attach a Service to an existing Device",
-            )
-            table.add_row(
-                "(builder)",
-                "add <type>",
-                "Bare type with no extra args drops into the interactive builder",
-            )
-            self.rich_console.print(table)
+        if topic in ("devices", "analysts", "users"):
+            self._render_domain_subhelp(topic)
             return
 
         if topic == "cartridges":
@@ -2766,60 +2930,269 @@ class WintermuteConsole:
             self.rich_console.print(table)
             return
 
-    def cmd_show(self) -> None:
-        """Visualise the live operation as a Rich tree.
+        if topic == "testruns":
+            table = Table(
+                title="testruns — Test Run Execution",
+                border_style="bright_blue",
+            )
+            table.add_column("Sub-command", style="cyan")
+            table.add_column("Usage", style="magenta")
+            table.add_column("Description", style="white")
+            table.add_row(
+                "load",
+                "testruns load <path>",
+                "Read a JSON TestPlan from disk and attach it to the active operation",
+            )
+            table.add_row(
+                "generate",
+                "testruns generate",
+                "Materialise TestCaseRuns for every attached plan "
+                "(skips runs that already exist)",
+            )
+            table.add_row(
+                "list",
+                "testruns list",
+                "Show all runs with id / target / status (color-coded)",
+            )
+            table.add_row(
+                "(drill)",
+                "<run_id>",
+                "Inside [testruns], typing a run_id like `TC-001:once` "
+                "opens [testruns/<run_id>] for deep editing",
+            )
 
-        Walks ``self.active_operation`` and prints a tree with the
-        operation name, assigned analysts, registered devices, and each
-        device's targeted peripherals. If the operation is empty the
-        method emits a single warning line so the user sees explicit
-        feedback instead of the silent prompt the previous implementation
-        produced.
+            deep = Table(
+                title="[testruns/<run_id>] — Deep Context",
+                border_style="bright_magenta",
+            )
+            deep.add_column("Command", style="cyan")
+            deep.add_column("Usage", style="magenta")
+            deep.add_column("Description", style="white")
+            deep.add_row(
+                "show",
+                "show",
+                "Render the run's panel: test case, target, status, "
+                "steps, notes, findings",
+            )
+            deep.add_row(
+                "status",
+                "status <state>",
+                "Set the run to one of `not_run`, `in_progress`, "
+                "`passed`, `failed`, `blocked`, `not_applicable`",
+            )
+            deep.add_row(
+                "start / pass / fail",
+                "start",
+                "Shorthand for `status in_progress` / `passed` / "
+                "`failed` (also calls start()/finish() on the run)",
+            )
+            deep.add_row(
+                "note",
+                'note "<text>"',
+                "Append a free-text note to run.notes (newline-separated)",
+            )
+            deep.add_row(
+                "vuln",
+                'vuln "<title>" <cvss>',
+                "Create a Vulnerability(title=…, cvss=…) and append it to run.findings",
+            )
+
+            self.rich_console.print(table)
+            self.rich_console.print(deep)
+            return
+
+    def _render_domain_subhelp(self, domain: str) -> None:
+        """Sub-help for the domain routers (`devices` / `analysts` /
+        `users`).
+
+        Renders the parent menu (list / add / edit / delete) and a deep
+        context table that documents what `set` and (for devices) the
+        nested `services` sub-commands accept.
+        """
+        spec = self._DOMAIN_SPECS[domain]
+        entity = spec["entity_label"]
+        id_attr = spec["id_attr"]
+        inline = self._INLINE_ADD_SPECS.get(entity, {})
+        inline_fields: List[str] = inline.get("fields", [])
+
+        table = Table(
+            title=f"{domain} — Operation Data",
+            border_style="bright_blue",
+        )
+        table.add_column("Sub-command", style="cyan")
+        table.add_column("Usage", style="magenta")
+        table.add_column("Description", style="white")
+        table.add_row(
+            "list",
+            f"{domain} list",
+            f"Render every {entity} attached to the active operation",
+        )
+        if inline_fields:
+            usage_args = " ".join(f"<{f}>" for f in inline_fields)
+            table.add_row(
+                "add",
+                f"{domain} add {usage_args}",
+                f"Append a new {entity}; partial args drop into the "
+                "builder pre-populated",
+            )
+        else:
+            table.add_row("add", f"{domain} add", f"Open a {entity} builder")
+        table.add_row(
+            "edit",
+            f"{domain} edit <{id_attr}>",
+            f"Open the deep editor for one {entity} "
+            f"(prompt becomes [{domain}/<{id_attr}>])",
+        )
+        table.add_row(
+            "delete",
+            f"{domain} delete <{id_attr}>",
+            f"Remove the {entity} with the given {id_attr}",
+        )
+        table.add_row(
+            "(drill)",
+            f"<{id_attr}>",
+            f"Inside [{domain}], typing a known {id_attr} is a "
+            f"shorthand for `edit <{id_attr}>`",
+        )
+
+        deep = Table(
+            title=f"[{domain}/<{id_attr}>] — Deep Context",
+            border_style="bright_magenta",
+        )
+        deep.add_column("Command", style="cyan")
+        deep.add_column("Usage", style="magenta")
+        deep.add_column("Description", style="white")
+        deep.add_row(
+            "show",
+            "show",
+            "Schema-aware Property/Type/Value table for the live "
+            f"{entity}, with sub-tables for any nested collections",
+        )
+        deep.add_row(
+            "set",
+            "set <prop> <value>",
+            f"Mutate the live {entity} via setattr (with int/bool/str type inference)",
+        )
+
+        # Dynamic nested-collection help is driven by the entity class's
+        # ``__schema__``: any list-typed schema field becomes a CRUD
+        # surface here. Hardcoding `services` for `devices` was the bug
+        # the architect rejected — now we document every schema key the
+        # operator can actually use.
+        cls = self.ENTITY_CLASSES.get(entity)
+        schema: Dict[str, Any] = (getattr(cls, "__schema__", {}) if cls else {}) or {}
+        for key, member_class in schema.items():
+            label = (
+                member_class.__name__
+                if isinstance(member_class, type)
+                else str(member_class)
+            )
+            deep.add_row(
+                f"{key} list",
+                f"{key} list",
+                f"List every {label} in `{entity}.{key}`",
+            )
+            deep.add_row(
+                f"{key} add",
+                f"{key} add [args ...]",
+                f"Append a new {label}; bare `add` opens an interactive builder",
+            )
+            deep.add_row(
+                f"{key} edit",
+                f"{key} edit <id>",
+                f"Drill into `[{domain}/<{id_attr}>/{key}/<id>]` to "
+                f"edit a single {label}",
+            )
+            deep.add_row(
+                f"{key} delete",
+                f"{key} delete <id>",
+                f"Remove a {label} by its human-readable id",
+            )
+
+        self.rich_console.print(table)
+        self.rich_console.print(deep)
+
+    def cmd_show(self) -> None:
+        """Render the live operation as a fully ``__schema__``-driven
+        Rich tree.
+
+        Replaces the previous hardcoded analysts/devices/peripherals
+        branches with a recursive walk over each object's
+        ``__schema__``. Any list-typed schema field with at least one
+        item becomes a folder-style sub-branch; every nested object
+        recurses through its OWN ``__schema__`` so a Service's
+        ``vulnerabilities`` and a Device's ``peripherals`` /
+        ``vulnerabilities`` show up automatically — without the
+        renderer having to know about them.
         """
         op = self.active_operation
-        analysts = list(getattr(op, "analysts", []) or [])
-        devices = list(getattr(op, "devices", []) or [])
-        any_peripherals = any(getattr(d, "peripherals", None) for d in devices)
+        schema = getattr(op, "__schema__", {}) or {}
 
-        if not analysts and not devices and not any_peripherals:
+        # Empty-state check: no schema collection has any items. The
+        # legacy "Operation is currently empty" wording is preserved
+        # because existing UX tests + downstream tooling assert against
+        # it verbatim.
+        has_any = any(
+            isinstance(getattr(op, key, None), list) and bool(getattr(op, key))
+            for key in schema
+        )
+        if not has_any:
             self.rich_console.print("[!] Operation is currently empty.")
             return
 
         op_name = getattr(op, "operation_name", "<unnamed>")
         tree = Tree(f"[bold cyan]Operation:[/] {op_name}")
-
-        analysts_branch = tree.add("[bold]Analysts[/]")
-        if analysts:
-            for analyst in analysts:
-                name = getattr(analyst, "name", "")
-                uid = getattr(analyst, "userid", "")
-                email = getattr(analyst, "email", "")
-                bits = [b for b in (name, uid, email) if b]
-                analysts_branch.add(" — ".join(bits) or repr(analyst))
-        else:
-            analysts_branch.add("[dim]none[/]")
-
-        devices_branch = tree.add("[bold]Devices[/]")
-        if devices:
-            for device in devices:
-                hostname = getattr(device, "hostname", "<unknown>")
-                ip = getattr(device, "ipaddr", "")
-                label = f"{hostname}"
-                if ip:
-                    label += f" ([dim]{ip}[/])"
-                d_node = devices_branch.add(label)
-                peripherals = list(getattr(device, "peripherals", []) or [])
-                if peripherals:
-                    p_node = d_node.add("[bold]Peripherals[/]")
-                    for peripheral in peripherals:
-                        p_type = type(peripheral).__name__
-                        p_name = getattr(peripheral, "name", "") or ""
-                        p_label = f"{p_type}: {p_name}" if p_name else p_type
-                        p_node.add(p_label)
-        else:
-            devices_branch.add("[dim]none[/]")
-
+        self._build_tree_nodes(op, tree)
         self.rich_console.print(tree)
+
+    def _build_tree_nodes(self, obj: Any, tree_branch: Any) -> None:
+        """Recurse over ``obj.__schema__`` adding folder-style branches
+        for every populated list-typed collection.
+
+        Each item gets a label derived from
+        :meth:`_human_label`'s fallback chain, then we recurse into
+        the item itself so its own schema fields surface as deeper
+        leaves. Scalars (e.g. ``Device.processor``) and empty
+        collections are skipped so the tree stays focused on populated
+        state.
+        """
+        schema = getattr(obj, "__schema__", {}) or {}
+        for collection_name in schema:
+            items = getattr(obj, collection_name, None)
+            if not isinstance(items, list) or not items:
+                continue
+            sub_branch = tree_branch.add(
+                f"[bold blue]{collection_name.capitalize()}[/]"
+            )
+            for item in items:
+                item_branch = sub_branch.add(self._human_label(item))
+                # Recurse — the item's own __schema__ drives deeper
+                # nesting (Service.vulnerabilities, Device.peripherals,
+                # …) without the renderer needing to know any specifics.
+                self._build_tree_nodes(item, item_branch)
+
+    @staticmethod
+    def _human_label(obj: Any) -> str:
+        """Best-effort human-readable label for a tree leaf.
+
+        Walks the standard identifier-attribute fallback chain
+        (``hostname``, ``name``, ``title``, ``portNumber``, ``userid``,
+        ``id``) and returns the first non-empty value, or the class
+        name as a last resort.
+        """
+        for attr in (
+            "hostname",
+            "name",
+            "title",
+            "portNumber",
+            "userid",
+            "id",
+        ):
+            value = getattr(obj, attr, None)
+            if value is None or value == "":
+                continue
+            return str(value)
+        return type(obj).__name__
 
     def cmd_add(self, input_string: str) -> None:
         """Strict-parse + append entity to the active operation.
@@ -2851,13 +3224,70 @@ class WintermuteConsole:
 
         entity = tokens[0].lower()
         rest = tokens[1:]
+
+        spec = self._INLINE_ADD_SPECS.get(entity)
+        if spec is None:
+            # Unsupported entity for inline-arg ingest — drop into the
+            # plain interactive builder so paths like `add cloudaccount`
+            # continue to work.
+            self.cmd_add_enter(entity)
+            return
+
+        fields: List[str] = spec["fields"]
+        required: int = spec["required"]
+
+        if len(rest) > len(fields):
+            self.rich_console.print(
+                f"[red][!] Too many args for `add {entity}`. "
+                f"Expected at most {len(fields)} ({', '.join(fields)}), "
+                f"got {len(rest)}.[/]"
+            )
+            return
+
+        if len(rest) >= required:
+            # All required fields satisfied → bypass the interactive
+            # builder and append directly.
+            self._inline_append(entity, rest)
+            return
+
+        # Partial → enter the builder pre-populated with whatever the
+        # operator already typed. Reusing cmd_builder_set gets type
+        # inference (int/bool detection) and the user-visible "Set k=v"
+        # echo for free.
+        self.cmd_add_enter(entity)
+        if not self.builder_stack:
+            return
+        for field, value in zip(fields, rest):
+            self.cmd_builder_set(field, value)
+        self.rich_console.print(
+            f"[*] Pre-populated {len(rest)} of {required} required field(s). "
+            "Use `set <key> <val>` to fill the rest, then `save`."
+        )
+
+    # Class-level table mapping entity → ordered field names + count of
+    # leading args required for the strict-append fast path. Mirrors the
+    # `help add` signatures so the documented and inline behavior agree.
+    _INLINE_ADD_SPECS: ClassVar[Dict[str, Dict[str, Any]]] = {
+        "analyst": {"fields": ["name", "userid", "email"], "required": 3},
+        "device": {"fields": ["hostname", "ipaddr"], "required": 1},
+        "user": {"fields": ["uid", "name", "email"], "required": 3},
+        "service": {
+            "fields": ["device_hostname", "portNumber", "app"],
+            "required": 3,
+        },
+    }
+
+    def _inline_append(self, entity: str, values: List[str]) -> None:
+        """Build the entity straight from positional args and append it.
+
+        Companion of :meth:`cmd_add`'s strict-append fast path. Each
+        branch matches the corresponding row in
+        :attr:`_INLINE_ADD_SPECS`.
+        """
         op = self.active_operation
 
         if entity == "analyst":
-            if len(rest) != 3:
-                self.rich_console.print('Usage: add analyst "<name>" <userid> <email>')
-                return
-            name, userid, email = rest
+            name, userid, email = values[:3]
             op.addAnalyst(name, userid, email)
             self.rich_console.print(
                 f"[green]✔[/] Added analyst [bold]{name}[/] ({userid})"
@@ -2865,11 +3295,8 @@ class WintermuteConsole:
             return
 
         if entity == "device":
-            if not (1 <= len(rest) <= 2):
-                self.rich_console.print("Usage: add device <hostname> [ip]")
-                return
-            hostname = rest[0]
-            ip = rest[1] if len(rest) == 2 else "127.0.0.1"
+            hostname = values[0]
+            ip = values[1] if len(values) >= 2 else "127.0.0.1"
             op.addDevice(hostname, ipaddr=ip)
             self.rich_console.print(
                 f"[green]✔[/] Added device [bold]{hostname}[/] ({ip})"
@@ -2877,21 +3304,13 @@ class WintermuteConsole:
             return
 
         if entity == "user":
-            if len(rest) != 3:
-                self.rich_console.print("Usage: add user <uid> <name> <email>")
-                return
-            uid, name, email = rest
+            uid, name, email = values[:3]
             op.addUser(uid, name, email, teams=[])
             self.rich_console.print(f"[green]✔[/] Added user [bold]{uid}[/] ({name})")
             return
 
         if entity == "service":
-            if len(rest) != 3:
-                self.rich_console.print(
-                    "Usage: add service <device_hostname> <port> <app>"
-                )
-                return
-            host, port_str, app = rest
+            host, port_str, app = values[:3]
             try:
                 port = int(port_str)
             except ValueError:
@@ -2910,9 +3329,631 @@ class WintermuteConsole:
             self.rich_console.print(f"[green]✔[/] Added service {port}/{app} to {host}")
             return
 
-        # Unsupported / partial → keep the legacy interactive builder so
-        # paths like `add cloudaccount` continue to work.
-        self.cmd_add_enter(entity)
+    # --- Operation Data Domain Routers ------------------------------------
+    #
+    # Replaces the generic `add` menu, which couldn't route nested objects
+    # cleanly (e.g. a `service` needs a parent `device`). The new top-level
+    # commands (`devices`, `analysts`, `users`) drop the operator into a
+    # domain context that knows how to list / add / edit / delete its own
+    # objects, and the deep `[devices/<hostname>]` form unlocks live
+    # editing including service management.
+
+    # Domain → live operation collection / primary identifier / inline
+    # append spec key. Source of truth for all domain routing.
+    _DOMAIN_SPECS: ClassVar[Dict[str, Dict[str, str]]] = {
+        "devices": {
+            "collection": "devices",
+            "id_attr": "hostname",
+            "entity_label": "device",
+        },
+        "analysts": {
+            "collection": "analysts",
+            "id_attr": "userid",
+            "entity_label": "analyst",
+        },
+        "users": {
+            "collection": "users",
+            "id_attr": "uid",
+            "entity_label": "user",
+        },
+    }
+
+    def cmd_domain(self, domain: str, args: List[str]) -> None:
+        """Sub-dispatcher for the top-level domain routers.
+
+        ``domain`` is one of ``devices``, ``analysts``, ``users``. With no
+        args, falls through to ``list``. Otherwise routes ``list / add /
+        edit / delete`` against :attr:`active_operation`.
+        """
+        if domain not in self._DOMAIN_SPECS:
+            self.rich_console.print(f"[red][!] Unknown domain: {domain}[/]")
+            return
+
+        if not args:
+            self._render_domain_list(domain)
+            return
+
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "list":
+            self._render_domain_list(domain)
+            return
+
+        if sub == "add":
+            self._domain_add(domain, rest)
+            return
+
+        if sub == "edit":
+            if len(rest) != 1:
+                self.rich_console.print(f"Usage: {domain} edit <id>")
+                return
+            self._domain_edit(domain, rest[0])
+            return
+
+        if sub == "delete":
+            if len(rest) != 1:
+                self.rich_console.print(f"Usage: {domain} delete <id>")
+                return
+            self._domain_delete(domain, rest[0])
+            return
+
+        self.rich_console.print(
+            f"[red][!] Unknown {domain} subcommand: {sub!r}[/]\n"
+            f"Usage: {domain} <list|add|edit|delete> [args ...]"
+        )
+
+    def _render_domain_list(self, domain: str) -> None:
+        spec = self._DOMAIN_SPECS[domain]
+        items = list(getattr(self.active_operation, spec["collection"]))
+        title_map = {
+            "devices": "🖥️  Devices",
+            "analysts": "🕵️  Analysts",
+            "users": "👤 Users",
+        }
+        if domain == "devices":
+            table = Table(title=title_map[domain], border_style="bright_blue")
+            table.add_column("Hostname", style="cyan")
+            table.add_column("IP", style="magenta")
+            table.add_column("OS", style="white")
+            table.add_column("Services", style="green", justify="right")
+            table.add_column("Vulns", style="red", justify="right")
+            if not items:
+                table.add_row("[dim]none[/]", "", "", "", "")
+            else:
+                for d in items:
+                    table.add_row(
+                        getattr(d, "hostname", ""),
+                        str(getattr(d, "ipaddr", "") or ""),
+                        getattr(d, "operatingsystem", "") or "",
+                        str(len(getattr(d, "services", []) or [])),
+                        str(len(getattr(d, "vulnerabilities", []) or [])),
+                    )
+        elif domain == "analysts":
+            table = Table(title=title_map[domain], border_style="bright_blue")
+            table.add_column("UserID", style="cyan")
+            table.add_column("Name", style="magenta")
+            table.add_column("Email", style="white")
+            if not items:
+                table.add_row("[dim]none[/]", "", "")
+            else:
+                for a in items:
+                    table.add_row(
+                        getattr(a, "userid", ""),
+                        getattr(a, "name", ""),
+                        str(getattr(a, "email", "") or ""),
+                    )
+        else:  # users
+            table = Table(title=title_map[domain], border_style="bright_blue")
+            table.add_column("UID", style="cyan")
+            table.add_column("Name", style="magenta")
+            table.add_column("Email", style="white")
+            if not items:
+                table.add_row("[dim]none[/]", "", "")
+            else:
+                for u in items:
+                    table.add_row(
+                        getattr(u, "uid", ""),
+                        getattr(u, "name", ""),
+                        str(getattr(u, "email", "") or ""),
+                    )
+        self.rich_console.print(table)
+
+    def _domain_add(self, domain: str, values: List[str]) -> None:
+        """Route ``<domain> add ...`` to the existing inline-append /
+        builder pre-populate flow.
+
+        Synthesises the entity-typed token ``cmd_add`` expects so all the
+        partial-args / strict-append / quoted-string handling we already
+        built stays in one place.
+        """
+        spec = self._DOMAIN_SPECS[domain]
+        entity_label = spec["entity_label"]
+        if not values:
+            # `<domain> add` with no values → empty interactive builder.
+            self.cmd_add_enter(entity_label)
+            return
+        # Plain-space join (NOT shlex.quote!) so the round-trip
+        # split-then-rejoin heals quoted multi-word args. The legacy
+        # dispatcher relied on this exact behaviour: when the run() loop
+        # split `analysts add "Foo Bar" jdoe …` on whitespace, the
+        # quotes ended up as embedded characters in the tokens; rejoining
+        # with spaces restores `"Foo Bar"` as a single shlex-parseable
+        # unit.
+        rebuilt = " ".join([entity_label, *values])
+        self.cmd_add(rebuilt)
+
+    # Fields the path resolver tries (in order) when looking up an object
+    # by a human-typed identifier. Matches the kinds of strings an
+    # operator naturally has on hand: hostnames, user ids, port numbers,
+    # service names, vulnerability titles, etc.
+    _HUMAN_ID_FIELDS: ClassVar[tuple[str, ...]] = (
+        "id",
+        "hostname",
+        "name",
+        "userid",
+        "uid",
+        "port",
+        "portNumber",
+        "app",
+        "title",
+        "ipaddr",
+    )
+
+    @classmethod
+    def _find_by_human_id(cls, collection: List[Any], identifier: str) -> Optional[Any]:
+        """Return the first object in ``collection`` whose any-of-known
+        human-readable fields stringifies to ``identifier``.
+
+        Used by every path-driven lookup (top-level domain edit, deep
+        ``__schema__`` traversal, services-by-port, …) so a single
+        traversal rule applies regardless of how nested the object is.
+        ``None`` if nothing matches.
+        """
+        for obj in collection:
+            for field in cls._HUMAN_ID_FIELDS:
+                value = getattr(obj, field, None)
+                if value is None or value == "":
+                    continue
+                if str(value) == identifier:
+                    return obj
+        return None
+
+    def _resolve_live_path(self, path: str) -> Optional[Any]:
+        """Walk a ``<collection>/<id>/<collection>/<id>/…`` path against
+        the active operation and return the deepest live object.
+
+        Each ``<collection>`` is resolved with ``getattr`` and each
+        ``<id>`` via :meth:`_find_by_human_id`. A trailing collection
+        with no identifier returns the collection list itself; a missing
+        link in the chain returns ``None``. Used both to resolve the
+        deep-context current_context AND for the ``back`` rewind path.
+        """
+        if not path:
+            return self.active_operation
+        parts = path.split("/")
+        current: Any = self.active_operation
+        i = 0
+        while i < len(parts):
+            collection_name = parts[i]
+            if i + 1 >= len(parts):
+                return getattr(current, collection_name, None)
+            ident = parts[i + 1]
+            collection = getattr(current, collection_name, None)
+            if not isinstance(collection, list):
+                return None
+            nested = self._find_by_human_id(collection, ident)
+            if nested is None:
+                return None
+            current = nested
+            i += 2
+        return current
+
+    def _lookup_domain_object(self, domain: str, ident: str) -> Optional[Any]:
+        """Top-level domain lookup.
+
+        Forwards to :meth:`_find_by_human_id` so the same human-readable
+        match rules apply at the root as in nested traversals.
+        """
+        spec = self._DOMAIN_SPECS[domain]
+        collection = list(getattr(self.active_operation, spec["collection"]))
+        return self._find_by_human_id(collection, ident)
+
+    def _domain_edit(self, domain: str, ident: str) -> None:
+        obj = self._lookup_domain_object(domain, ident)
+        if obj is None:
+            self.rich_console.print(
+                f"[red][!] No {self._DOMAIN_SPECS[domain]['entity_label']} "
+                f"with id {ident!r}.[/]"
+            )
+            return
+        # Drilldown — the prompt flips to `[<domain>/<id>]` and the
+        # contextual dispatcher takes over from here.
+        self.current_context = f"{domain}/{ident}"
+        self.rich_console.print(
+            f"[*] Editing live [bold]{ident}[/] — `show` displays current "
+            "state, `set <prop> <val>` mutates it, `back` returns."
+        )
+
+    def _domain_delete(self, domain: str, ident: str) -> None:
+        spec = self._DOMAIN_SPECS[domain]
+        collection: list[Any] = getattr(self.active_operation, spec["collection"])
+        before = len(collection)
+        collection[:] = [
+            obj for obj in collection if getattr(obj, spec["id_attr"], None) != ident
+        ]
+        if len(collection) == before:
+            self.rich_console.print(
+                f"[yellow]No {spec['entity_label']} with id {ident!r} to delete.[/]"
+            )
+            return
+        # If the operator was deep-editing this very object, pop them out.
+        if self.current_context == f"{domain}/{ident}":
+            self.current_context = domain
+        self.rich_console.print(
+            f"[green]✔[/] Removed {spec['entity_label']} [bold]{ident}[/]"
+        )
+
+    def _render_live_object_panel(self, obj: Any, label: str) -> None:
+        """Schema-aware Property/Type/Value table for a *live* operation
+        object (not a builder), with sub-tables for any nested service /
+        vulnerability collections.
+        """
+        cls = type(obj)
+        ident_label = self._object_identity(obj)
+        table = Table(title=f"{label}: {ident_label}", border_style="bright_blue")
+        table.add_column("Property", style="cyan")
+        table.add_column("Type", style="magenta")
+        table.add_column("Value", style="green")
+
+        ordered, types = self._introspect_constructor_fields(cls)
+        if not ordered:
+            # Fall back to the live attribute set when introspection fails
+            # (e.g. ad-hoc dynamic classes).
+            ordered = [k for k in vars(obj) if not k.startswith("_")]
+            for k in ordered:
+                types.setdefault(k, type(getattr(obj, k)).__name__)
+
+        nested_keys = {"services", "vulnerabilities", "peripherals"}
+        for field_name in ordered:
+            if field_name in nested_keys:
+                # Render nested collections as their own tables below;
+                # show only the count here so the main table stays readable.
+                value = getattr(obj, field_name, None) or []
+                table.add_row(
+                    field_name,
+                    types.get(field_name, ""),
+                    f"[dim]{len(value)} item(s) — see sub-table[/]",
+                )
+                continue
+            value = getattr(obj, field_name, None)
+            if value is None or value == "":
+                value_str = "[dim]<unset>[/]"
+            else:
+                value_str = self._format_property_value(value)
+            table.add_row(field_name, types.get(field_name, ""), value_str)
+
+        self.rich_console.print(table)
+
+        # Sub-tables for nested collections.
+        services = list(getattr(obj, "services", None) or [])
+        if services:
+            self._render_services_table(services)
+        vulns = list(getattr(obj, "vulnerabilities", None) or [])
+        if vulns:
+            self._render_vulnerabilities_table(vulns)
+
+    def _render_services_table(self, services: List[Any]) -> None:
+        sub = Table(title="Services", border_style="bright_magenta")
+        sub.add_column("Port", style="cyan", justify="right")
+        sub.add_column("App", style="magenta")
+        sub.add_column("Protocol", style="white")
+        sub.add_column("Vulns", style="red", justify="right")
+        for s in services:
+            sub.add_row(
+                str(getattr(s, "portNumber", "")),
+                str(getattr(s, "app", "") or ""),
+                str(getattr(s, "protocol", "") or ""),
+                str(len(getattr(s, "vulnerabilities", []) or [])),
+            )
+        self.rich_console.print(sub)
+
+    def _render_vulnerabilities_table(self, vulns: List[Any]) -> None:
+        sub = Table(title="Vulnerabilities", border_style="red")
+        sub.add_column("Title", style="cyan")
+        sub.add_column("CVSS", style="magenta", justify="right")
+        sub.add_column("Severity", style="white")
+        for v in vulns:
+            risk = getattr(v, "risk", None)
+            severity = getattr(risk, "severity", "") if risk is not None else ""
+            sub.add_row(
+                str(getattr(v, "title", "") or ""),
+                str(getattr(v, "cvss", "")),
+                str(severity or ""),
+            )
+        self.rich_console.print(sub)
+
+    @staticmethod
+    def _object_identity(obj: Any) -> str:
+        for attr in ("hostname", "userid", "uid", "name", "title"):
+            value = getattr(obj, attr, None)
+            if value:
+                return str(value)
+        return repr(obj)
+
+    @staticmethod
+    def _coerce_scalar_value(raw: str) -> str | int | bool:
+        """Match :meth:`cmd_builder_set`'s int/bool/string inference for
+        the live-object `set` path."""
+        stripped = raw
+        if len(stripped) >= 2 and (
+            (stripped.startswith('"') and stripped.endswith('"'))
+            or (stripped.startswith("'") and stripped.endswith("'"))
+        ):
+            stripped = stripped[1:-1]
+        if stripped.isdigit():
+            return int(stripped)
+        if stripped.lower() == "true":
+            return True
+        if stripped.lower() == "false":
+            return False
+        return stripped
+
+    def _set_live_attr(self, obj: Any, prop: str, raw_value: str) -> None:
+        coerced = self._coerce_scalar_value(raw_value)
+        try:
+            setattr(obj, prop, coerced)
+        except Exception as exc:
+            self.rich_console.print(f"[red][!] Failed to set {prop}: {exc}[/]")
+            return
+        self.rich_console.print(f"[*] Set {prop} = {coerced}")
+
+    # --- Schema-driven nested collection dispatcher ----------------------
+
+    def _dispatch_nested_schema(
+        self, live_object: Any, schema_key: str, args: List[str]
+    ) -> bool:
+        """Handle ``<schema_key> list|add|edit|delete`` against a live
+        object's ``__schema__``-declared collection.
+
+        ``live_object.__schema__[schema_key]`` is the *target class* used
+        when adding new members (resolved from forward-reference strings
+        if necessary). The actual list is always
+        ``getattr(live_object, schema_key)``.
+
+        This replaces the previous hardcoded services sub-dispatcher so
+        every collection registered in any model's ``__schema__``
+        (peripherals, vulnerabilities, findings, test_cases, …) gets the
+        same uniform CRUD surface.
+        """
+        schema: Dict[str, Any] = getattr(live_object, "__schema__", {}) or {}
+        target_class = schema.get(schema_key)
+        if target_class is None:
+            return False
+        if isinstance(target_class, str):
+            resolved = self._resolve_forward_class(target_class, type(live_object))
+            if resolved is None:
+                self.rich_console.print(
+                    f"[red][!] Could not resolve forward-reference "
+                    f"{target_class!r} for {schema_key}.[/]"
+                )
+                return True
+            target_class = resolved
+
+        target_collection = getattr(live_object, schema_key, None)
+        if not isinstance(target_collection, list):
+            # Schema entries that are scalar (e.g. ``processor`` on
+            # Device) don't fit the list-CRUD surface. Surface a hint
+            # instead of pretending we handled it.
+            self.rich_console.print(
+                f"[yellow]{schema_key!r} on "
+                f"{type(live_object).__name__} is scalar, not a "
+                "collection — use `set` instead.[/]"
+            )
+            return True
+
+        if not args:
+            self._render_collection_table(target_collection, schema_key, target_class)
+            return True
+
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "list":
+            self._render_collection_table(target_collection, schema_key, target_class)
+            return True
+
+        if sub == "edit":
+            if len(rest) != 1:
+                self.rich_console.print(f"Usage: {schema_key} edit <id>")
+                return True
+            nested = self._find_by_human_id(target_collection, rest[0])
+            if nested is None:
+                self.rich_console.print(
+                    f"[red][!] No {schema_key} entry matching {rest[0]!r}.[/]"
+                )
+                return True
+            self.current_context = f"{self.current_context}/{schema_key}/{rest[0]}"
+            self.rich_console.print(
+                f"[*] Editing live [bold]{rest[0]}[/] — `show` displays "
+                "current state, `set <prop> <val>` mutates it, `back` "
+                "returns."
+            )
+            return True
+
+        if sub == "delete":
+            if len(rest) != 1:
+                self.rich_console.print(f"Usage: {schema_key} delete <id>")
+                return True
+            nested = self._find_by_human_id(target_collection, rest[0])
+            if nested is None:
+                self.rich_console.print(
+                    f"[yellow]No {schema_key} entry matching {rest[0]!r} to delete.[/]"
+                )
+                return True
+            target_collection.remove(nested)
+            # If the operator was deep-editing this very object, pop
+            # the context one level up so the prompt reflects reality.
+            doomed_path = f"{self.current_context}/{schema_key}/{rest[0]}"
+            if self.current_context.startswith(doomed_path):
+                # Pop the last `<schema_key>/<id>` pair.
+                parts = self.current_context.split("/")
+                self.current_context = "/".join(parts[:-2])
+            self.rich_console.print(
+                f"[green]✔[/] Removed {schema_key} entry [bold]{rest[0]}[/]"
+            )
+            return True
+
+        if sub == "add":
+            return self._dispatch_schema_add(
+                target_class, target_collection, rest, schema_key
+            )
+
+        self.rich_console.print(f"[red][!] Unknown {schema_key} subcommand: {sub!r}[/]")
+        return True
+
+    def _dispatch_schema_add(
+        self,
+        target_class: type,
+        target_collection: List[Any],
+        values: List[str],
+        schema_key: str,
+    ) -> bool:
+        """Strict-append fast path / partial-args builder for any class
+        registered in a parent's ``__schema__``.
+
+        ``values`` are zipped against ``target_class.__init__`` parameter
+        order with int/bool/str coercion. With ALL required fields
+        satisfied we construct + append directly; otherwise we drop into
+        a builder pre-populated with whatever the operator typed,
+        anchored to ``target_collection`` so the eventual ``save``
+        commits to that live list.
+        """
+        ordered, _types = self._introspect_constructor_fields(target_class)
+        if not ordered:
+            self.rich_console.print(
+                f"[red][!] Cannot introspect {target_class.__name__} constructor.[/]"
+            )
+            return True
+        required_count = self._required_param_count(target_class)
+
+        if len(values) > len(ordered):
+            self.rich_console.print(
+                f"[red][!] Too many args for `{schema_key} add`. "
+                f"Expected at most {len(ordered)} ({', '.join(ordered)}), "
+                f"got {len(values)}.[/]"
+            )
+            return True
+
+        # Empty add when the class has any fields → drop into the
+        # interactive builder rather than silently appending an
+        # all-defaults instance.
+        if not values:
+            self.cmd_add_enter(
+                target_class.__name__.lower(),
+                cls=target_class,
+                target_collection=target_collection,
+            )
+            return True
+
+        if len(values) >= required_count:
+            kwargs: Dict[str, Any] = {}
+            for name, raw in zip(ordered, values):
+                kwargs[name] = self._coerce_scalar_value(raw)
+            try:
+                obj = target_class(**kwargs)
+            except Exception as exc:
+                self.rich_console.print(
+                    f"[red][!] Failed to construct {target_class.__name__}: {exc}[/]"
+                )
+                return True
+            target_collection.append(obj)
+            self.rich_console.print(
+                f"[green]✔[/] Added {target_class.__name__} "
+                f"[bold]{self._object_identity(obj)}[/] to {schema_key}"
+            )
+            return True
+
+        # Partial → builder pre-populated.
+        self.cmd_add_enter(
+            target_class.__name__.lower(),
+            cls=target_class,
+            target_collection=target_collection,
+        )
+        if not self.builder_stack:
+            return True
+        for name, value in zip(ordered, values):
+            self.cmd_builder_set(name, value)
+        self.rich_console.print(
+            f"[*] Pre-populated {len(values)} of {required_count} "
+            "required field(s). Use `set <key> <val>` to fill the rest, "
+            "then `save`."
+        )
+        return True
+
+    @staticmethod
+    def _required_param_count(target_class: type) -> int:
+        try:
+            sig = inspect.signature(target_class)
+        except (TypeError, ValueError):
+            return 0
+        count = 0
+        for name, param in sig.parameters.items():
+            if name in ("self", "args", "kwargs"):
+                continue
+            if param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+            if param.default is inspect.Parameter.empty:
+                count += 1
+        return count
+
+    @staticmethod
+    def _resolve_forward_class(
+        ref: str, hint_cls: Optional[type] = None
+    ) -> Optional[type]:
+        """Resolve a string forward-reference (used in ``__schema__``
+        for self-referential models like ``TestPlan``)."""
+        if hint_cls is not None and hint_cls.__name__ == ref:
+            return hint_cls
+        if hint_cls is not None:
+            module = inspect.getmodule(hint_cls)
+            if module is not None:
+                resolved = getattr(module, ref, None)
+                if isinstance(resolved, type):
+                    return resolved
+        return None
+
+    def _render_collection_table(
+        self,
+        items: List[Any],
+        schema_key: str,
+        target_class: type,
+    ) -> None:
+        """Schema-driven render: column per constructor field (capped at
+        4 for compactness) plus an empty-state hint."""
+        if not items:
+            self.rich_console.print(f"[yellow]No {schema_key} attached.[/]")
+            return
+        ordered, _types = self._introspect_constructor_fields(target_class)
+        # Fall back to the live attribute set when introspection fails
+        # (rare; covers ad-hoc dynamic classes).
+        if not ordered:
+            sample = items[0]
+            ordered = [k for k in vars(sample) if not k.startswith("_")]
+        shown = ordered[:4]
+        table = Table(
+            title=f"{schema_key.capitalize()} ({target_class.__name__})",
+            border_style="bright_blue",
+        )
+        for col in shown:
+            table.add_column(col, style="cyan")
+        for item in items:
+            row = [self._format_property_value(getattr(item, col, "")) for col in shown]
+            table.add_row(*row)
+        self.rich_console.print(table)
 
     # --- Cartridge Manager (replaces legacy `use`) -------------------------
 
@@ -3183,6 +4224,435 @@ class WintermuteConsole:
                 out.append(value)
         return out
 
+    # --- Test Run Management -----------------------------------------------
+
+    # Status -> rich color mapping for the run table / detail panel.
+    _RUN_STATUS_STYLE: ClassVar[Dict[str, str]] = {
+        "not_run": "white",
+        "in_progress": "yellow",
+        "passed": "green",
+        "failed": "red",
+        "blocked": "magenta",
+        "not_applicable": "dim",
+    }
+
+    def _find_test_run(self, run_id: str) -> Optional[TestCaseRun]:
+        for run in self.active_operation.test_runs:
+            if run.run_id == run_id:
+                return run
+        return None
+
+    def _find_test_case(self, code: str) -> Optional[TestCase]:
+        for tc in self.active_operation.iterTestCases():
+            if tc.code == code:
+                return tc
+        return None
+
+    def cmd_testruns(self, args: List[str]) -> None:
+        """Dispatcher for ``testruns <load|generate|list> [...]``.
+
+        Backed by the live ``self.active_operation``. Designed so the
+        operator can drive the full execution flow (load plan → generate
+        runs → list runs → drill into one → update status / attach
+        findings) without ever leaving the REPL.
+        """
+        if not args:
+            self.rich_console.print(
+                "Usage: testruns <load|generate|list> [args ...]  (try `help testruns`)"
+            )
+            return
+
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "load":
+            if len(rest) != 1:
+                self.rich_console.print("Usage: testruns load <path>")
+                return
+            self._cmd_testruns_load(rest[0])
+            return
+
+        if sub == "generate":
+            created = self.active_operation.generateTestRuns(replace=False)
+            self.rich_console.print(
+                f"[green]✔[/] Generated [bold]{len(created)}[/] new test "
+                f"run(s). Total runs: {len(self.active_operation.test_runs)}."
+            )
+            return
+
+        if sub == "list":
+            self._render_test_runs_list()
+            return
+
+        self.rich_console.print(
+            f"[red][!] Unknown testruns subcommand: {sub!r}[/]\n"
+            "Usage: testruns <load|generate|list> [args ...]"
+        )
+
+    def _cmd_testruns_load(self, path: str) -> None:
+        target = Path(path).expanduser()
+        if not target.is_file():
+            self.rich_console.print(f"[red][!] File not found: {target}[/]")
+            return
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.rich_console.print(f"[red][!] Failed to parse {target}: {exc}[/]")
+            return
+        try:
+            plan = TestPlan.from_dict(data)
+        except Exception as exc:
+            self.rich_console.print(
+                f"[red][!] {target} is not a valid TestPlan: {exc}[/]"
+            )
+            return
+        added = self.active_operation.addTestPlan(plan)
+        if added:
+            self.rich_console.print(
+                f"[green]✔[/] Loaded test plan [bold]{plan.code}[/] "
+                f"({len(plan.test_cases)} test case(s))."
+            )
+        else:
+            self.rich_console.print(
+                f"[yellow]Test plan {plan.code!r} is already attached.[/]"
+            )
+
+    def _render_test_runs_list(self) -> None:
+        runs = list(self.active_operation.test_runs)
+        if not runs:
+            self.rich_console.print(
+                "[yellow]No test runs yet — load a plan with "
+                "`testruns load <path>` then `testruns generate`.[/]"
+            )
+            return
+        table = Table(title="🧪 Test Runs", border_style="bright_blue")
+        table.add_column("Run ID", style="cyan")
+        table.add_column("Test Case", style="magenta")
+        table.add_column("Bound / Target", style="white")
+        table.add_column("Status", style="white")
+        for run in runs:
+            target = (
+                ", ".join(f"{b.alias}={b.object_id}" for b in run.bound)
+                or "[dim]once[/]"
+            )
+            status_color = self._RUN_STATUS_STYLE.get(run.status.value, "white")
+            table.add_row(
+                run.run_id,
+                run.test_case_code,
+                target,
+                f"[{status_color}]{run.status.value}[/]",
+            )
+        self.rich_console.print(table)
+
+    def _render_test_run_detail(self, run_id: str) -> None:
+        run = self._find_test_run(run_id)
+        if run is None:
+            self.rich_console.print(f"[red][!] No test run with id {run_id!r}.[/]")
+            return
+        tc = self._find_test_case(run.test_case_code)
+
+        target = (
+            "\n".join(f"  • {b.alias} ({b.kind}) → {b.object_id}" for b in run.bound)
+            or "  • once"
+        )
+        status_color = self._RUN_STATUS_STYLE.get(run.status.value, "white")
+
+        lines: List[str] = []
+        if tc is not None:
+            lines.append(f"[bold]Test Case:[/] {tc.code} — {tc.name}")
+            if tc.description:
+                lines.append(f"[bold]Description:[/] {tc.description}")
+        else:
+            lines.append(
+                f"[bold]Test Case:[/] {run.test_case_code} "
+                "[dim](case not found in attached plans)[/]"
+            )
+        lines.append(f"[bold]Bound Target:[/]\n{target}")
+        lines.append(f"[bold]Status:[/] [{status_color}]{run.status.value}[/]")
+        lines.append(
+            f"[bold]Started:[/] {run.started_at.isoformat() if run.started_at else '—'}"
+        )
+        lines.append(
+            f"[bold]Ended:[/] {run.ended_at.isoformat() if run.ended_at else '—'}"
+        )
+        lines.append(f"[bold]Executed by:[/] {run.executed_by or '—'}")
+
+        if tc is not None and tc.steps:
+            step_lines = [
+                f"  {i}. {step.title or step.action or '(unnamed)'}"
+                for i, step in enumerate(tc.steps, 1)
+            ]
+            lines.append("[bold]Reproduction Steps:[/]\n" + "\n".join(step_lines))
+
+        notes = run.notes or "[dim]none[/]"
+        lines.append(f"[bold]Notes:[/]\n{notes}")
+
+        if run.findings:
+            finding_lines = [f"  • {v.title} (CVSS {v.cvss})" for v in run.findings]
+            lines.append("[bold]Findings:[/]\n" + "\n".join(finding_lines))
+        else:
+            lines.append("[bold]Findings:[/] [dim]none[/]")
+
+        self.rich_console.print(
+            Panel(
+                "\n".join(lines),
+                title=f"🧪 {run.run_id}",
+                border_style="bright_blue",
+            )
+        )
+
+    def _set_run_status(self, run_id: str, state: str) -> None:
+        run = self._find_test_run(run_id)
+        if run is None:
+            self.rich_console.print(f"[red][!] No test run with id {run_id!r}.[/]")
+            return
+        try:
+            new_status = RunStatus(state)
+        except ValueError:
+            valid = ", ".join(s.value for s in RunStatus)
+            self.rich_console.print(
+                f"[red][!] Invalid status {state!r}. Valid: {valid}[/]"
+            )
+            return
+        run.status = new_status
+        if new_status == RunStatus.in_progress:
+            run.start()
+        elif new_status in (
+            RunStatus.passed,
+            RunStatus.failed,
+            RunStatus.blocked,
+            RunStatus.not_applicable,
+        ):
+            run.finish()
+        color = self._RUN_STATUS_STYLE.get(new_status.value, "white")
+        self.rich_console.print(
+            f"[green]✔[/] Run [bold]{run_id}[/] → [{color}]{new_status.value}[/]"
+        )
+
+    def _append_run_note(self, run_id: str, note: str) -> None:
+        run = self._find_test_run(run_id)
+        if run is None:
+            self.rich_console.print(f"[red][!] No test run with id {run_id!r}.[/]")
+            return
+        # `notes` is a single string field; append with a newline so each
+        # note is on its own line for the eventual report.
+        run.notes = f"{run.notes}\n{note}" if run.notes else note
+        self.rich_console.print(f"[green]✔[/] Note appended to [bold]{run_id}[/]")
+
+    def _attach_run_vulnerability(
+        self, run_id: str, title: str, cvss: int, description: str = ""
+    ) -> None:
+        run = self._find_test_run(run_id)
+        if run is None:
+            self.rich_console.print(f"[red][!] No test run with id {run_id!r}.[/]")
+            return
+        vuln = Vulnerability(title=title, cvss=cvss, description=description)
+        run.findings.append(vuln)
+        self.rich_console.print(
+            f"[green]✔[/] Attached vulnerability [bold]{title}[/] "
+            f"(CVSS {cvss}) to [bold]{run_id}[/]"
+        )
+
+    def cmd_testrun_action(self, run_id: str, raw_input: str) -> None:
+        """Deep-context handler invoked from `[testruns/<run_id>]`.
+
+        ``raw_input`` is the entire post-command string; this method
+        re-shlexes it so quoted arguments (note "<text>", vuln
+        "<title>") survive intact.
+        """
+        try:
+            tokens = shlex.split(raw_input)
+        except ValueError as exc:
+            self.rich_console.print(f"[red][!] Bad quoting in arguments: {exc}[/]")
+            return
+        if not tokens:
+            self.rich_console.print(
+                "Usage: <show|status|start|pass|fail|note|vuln> ..."
+            )
+            return
+
+        action = tokens[0].lower()
+        rest = tokens[1:]
+
+        if action == "show":
+            self._render_test_run_detail(run_id)
+            return
+
+        if action == "status":
+            if len(rest) != 1:
+                valid = ", ".join(s.value for s in RunStatus)
+                self.rich_console.print(f"Usage: status <{valid}>")
+                return
+            self._set_run_status(run_id, rest[0])
+            return
+
+        if action in ("start", "pass", "fail"):
+            mapping = {
+                "start": RunStatus.in_progress.value,
+                "pass": RunStatus.passed.value,
+                "fail": RunStatus.failed.value,
+            }
+            self._set_run_status(run_id, mapping[action])
+            return
+
+        if action == "note":
+            if not rest:
+                self.rich_console.print('Usage: note "<text>"')
+                return
+            self._append_run_note(run_id, " ".join(rest))
+            return
+
+        if action == "vuln":
+            if len(rest) != 2:
+                self.rich_console.print('Usage: vuln "<title>" <cvss>')
+                return
+            title = rest[0]
+            try:
+                cvss = int(rest[1])
+            except ValueError:
+                self.rich_console.print(
+                    f"[red][!] CVSS must be an integer, got {rest[1]!r}[/]"
+                )
+                return
+            self._attach_run_vulnerability(run_id, title, cvss)
+            return
+
+        self.rich_console.print(f"[red][!] Unknown deep-context command: {action!r}[/]")
+
+    # --- Local AI Tools (bound to active_operation) ------------------------
+    #
+    # Registered into the global tool registry from `__init__`. The Local
+    # Console AI cannot use the MCP ``ObjectRegistry`` (different process,
+    # different state), so these closures expose the live operation to the
+    # `tool_calling_chat` flow.
+
+    def ai_list_test_runs(self) -> dict[str, Any]:
+        """List every TestCaseRun attached to the active operation.
+
+        Returns:
+            A dictionary with ``total`` (int) and ``runs`` (list of
+            ``{run_id, test_case_code, status, executed_by, bound}``
+            entries). ``bound`` is itself a list of
+            ``{alias, kind, object_id}`` describing each target the
+            run is bound to.
+        """
+        runs = self.active_operation.test_runs
+        return {
+            "total": len(runs),
+            "runs": [
+                {
+                    "run_id": r.run_id,
+                    "test_case_code": r.test_case_code,
+                    "status": r.status.value,
+                    "executed_by": r.executed_by,
+                    "bound": [
+                        {
+                            "alias": b.alias,
+                            "kind": b.kind,
+                            "object_id": b.object_id,
+                        }
+                        for b in r.bound
+                    ],
+                }
+                for r in runs
+            ],
+        }
+
+    def ai_get_run_details(self, run_id: str) -> dict[str, Any]:
+        """Return the full state of a single test run by id.
+
+        Args:
+            run_id: Identifier from :func:`ai_list_test_runs`
+                (e.g. ``"TC-001:once"`` or ``"TC-002:dev01:eth0"``).
+
+        Returns:
+            A dictionary with the run's fields plus the parent test
+            case's name / description / step count, or
+            ``{"error": "..."}`` if no run with that id exists.
+        """
+        run = self._find_test_run(run_id)
+        if run is None:
+            return {"error": f"no test run with id {run_id!r}"}
+        tc = self._find_test_case(run.test_case_code)
+        out: dict[str, Any] = {
+            "run_id": run.run_id,
+            "test_case_code": run.test_case_code,
+            "status": run.status.value,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+            "executed_by": run.executed_by,
+            "notes": run.notes,
+            "bound": [
+                {"alias": b.alias, "kind": b.kind, "object_id": b.object_id}
+                for b in run.bound
+            ],
+            "findings": [
+                {"title": v.title, "cvss": v.cvss, "vuln_id": v.vuln_id}
+                for v in run.findings
+            ],
+        }
+        if tc is not None:
+            out["test_case"] = {
+                "name": tc.name,
+                "description": tc.description,
+                "step_count": len(tc.steps),
+            }
+        return out
+
+    def ai_update_run_status(self, run_id: str, status: str) -> dict[str, Any]:
+        """Update a test run's status, calling start()/finish() as appropriate.
+
+        Args:
+            run_id: Identifier from :func:`ai_list_test_runs`.
+            status: One of ``"not_run"``, ``"in_progress"``, ``"passed"``,
+                ``"failed"``, ``"blocked"``, ``"not_applicable"``.
+                ``"in_progress"`` calls :meth:`TestCaseRun.start` (sets
+                ``started_at``); any terminal status calls
+                :meth:`TestCaseRun.finish` (sets ``ended_at``).
+
+        Returns:
+            ``{"run_id", "status"}`` on success, or ``{"error": "..."}``.
+        """
+        run = self._find_test_run(run_id)
+        if run is None:
+            return {"error": f"no test run with id {run_id!r}"}
+        try:
+            new_status = RunStatus(status)
+        except ValueError:
+            valid = [s.value for s in RunStatus]
+            return {
+                "error": f"invalid status {status!r}",
+                "valid": valid,
+            }
+        run.status = new_status
+        if new_status == RunStatus.in_progress:
+            run.start()
+        elif new_status in (
+            RunStatus.passed,
+            RunStatus.failed,
+            RunStatus.blocked,
+            RunStatus.not_applicable,
+        ):
+            run.finish()
+        return {"run_id": run_id, "status": new_status.value}
+
+    def ai_add_run_note(self, run_id: str, note: str) -> dict[str, Any]:
+        """Append a free-text note to a test run, separated by newline.
+
+        Args:
+            run_id: Identifier from :func:`ai_list_test_runs`.
+            note: Text to append.
+
+        Returns:
+            ``{"run_id", "notes_length"}`` on success, or
+            ``{"error": "..."}``.
+        """
+        run = self._find_test_run(run_id)
+        if run is None:
+            return {"error": f"no test run with id {run_id!r}"}
+        run.notes = f"{run.notes}\n{note}" if run.notes else note
+        return {"run_id": run_id, "notes_length": len(run.notes)}
+
     def cmd_tools(self, *args: str) -> None:
         if not args:
             self.rich_console.print("Usage: tools <list|mcp|load> [args]")
@@ -3396,6 +4866,96 @@ class WintermuteConsole:
         {"back", "exit", "help", "show", "status", "workspace"}
     )
 
+    def _dispatch_builder_command(self, cmd: str, args: List[str]) -> bool:
+        """Dispatch a single command while a builder is active on the stack.
+
+        Returns ``True`` when the command was consumed by the builder
+        flow (``set`` / ``show`` / ``save`` / ``create`` / ``add ...``).
+        Returns ``False`` for everything else so the run() loop can fall
+        through to the global handlers.
+
+        Extracted from the previously-inlined BUILDER CONTEXT HANDLER so
+        the locked-down ``add`` fallback can be exercised by tests
+        without reproducing the dispatcher logic.
+        """
+        if cmd == "set" and len(args) >= 2:
+            self.cmd_builder_set(args[0], " ".join(args[1:]))
+            return True
+        if cmd == "show":
+            self.cmd_builder_show()
+            return True
+        if cmd in ("save", "create"):
+            self.cmd_builder_save()
+            return True
+        if cmd == "add" and args:
+            # NEW STRICT ROUTING
+            # Check for 'add peripheral <type>'
+            if args[0] == "peripheral" and len(args) > 1:
+                p_type = args[1].lower()
+                if p_type in self.PERIPHERAL_MAP:
+                    self.builder_stack.append(
+                        BuilderContext(
+                            p_type,
+                            self.PERIPHERAL_MAP[p_type],
+                            parent_list_name="peripherals",
+                        )
+                    )
+                    self.rich_console.print(f"[*] Constructing {p_type} node...")
+                else:
+                    self.rich_console.print(
+                        f"[red][!] Unknown peripheral type: {p_type}[/]"
+                    )
+                return True
+
+            # Check for 'add vulnerability'
+            if args[0] == "vulnerability":
+                from wintermute.findings import Vulnerability
+
+                self.builder_stack.append(
+                    BuilderContext(
+                        "vulnerability",
+                        Vulnerability,
+                        parent_list_name="vulnerabilities",
+                    )
+                )
+                self.rich_console.print("[*] Constructing vulnerability node...")
+                return True
+
+            # Check for cloud nested types (AWS only)
+            if (
+                args[0].lower() in self.CLOUD_NESTED_MAP
+                and self._is_cloud_builder_aws()
+            ):
+                cloud_cls, parent_list = self.CLOUD_NESTED_MAP[args[0].lower()]
+                self.builder_stack.append(
+                    BuilderContext(
+                        args[0].lower(),
+                        cloud_cls,
+                        parent_list_name=parent_list,
+                    )
+                )
+                self.rich_console.print(f"[*] Constructing {args[0].lower()} node...")
+                return True
+
+            # Locked down: any unrecognised `add <type>` while inside a
+            # builder used to silently stack a brand-new builder via
+            # ``cmd_add_enter(args[0])`` — that produced the "Russian
+            # doll" trap where a typo like `add user ...` inside a
+            # `device` builder quietly nested an unrelated user builder
+            # with the inline args dropped on the floor. Now we refuse
+            # explicitly so the operator gets feedback instead of silent
+            # corruption.
+            self.rich_console.print(
+                f"[red][!] Cannot add '{args[0]}' directly "
+                f"into a {self.builder_stack[-1].entity_name} "
+                "builder.[/]"
+            )
+            return True
+
+        # Anything else (e.g. global commands) — let run() fall through
+        # to the regular handlers.
+        return False
+
     async def _dispatch_contextual(self, cmd: str, args: List[str]) -> bool:
         """Route ``cmd`` based on :attr:`current_context`.
 
@@ -3442,6 +5002,100 @@ class WintermuteConsole:
                 return True
             return False
 
+        if self.current_context == "testruns":
+            if cmd in ("load", "generate", "list"):
+                self.cmd_testruns([cmd, *args])
+                return True
+            # Drill into a specific run by id (e.g. `TC-001:once`).
+            existing_ids = {r.run_id for r in self.active_operation.test_runs}
+            if cmd in existing_ids:
+                self.current_context = f"testruns/{cmd}"
+                return True
+            return False
+
+        if self.current_context.startswith("testruns/"):
+            run_id = self.current_context.split("/", 1)[1]
+            # Reconstruct the original token stream so quoted args (e.g.
+            # `note "multi word"`) survive through cmd_testrun_action.
+            raw = " ".join(args)
+            if cmd in ("show", "status", "start", "pass", "fail", "note", "vuln"):
+                self.cmd_testrun_action(run_id, f"{cmd} {raw}".strip())
+                return True
+            return False
+
+        # ----- Operation Data Domain Routers --------------------------
+        # Top-level domain contexts let the operator manage Operation
+        # data (devices / analysts / users) cleanly without the broken
+        # generic `add` menu.
+
+        if self.current_context in self._DOMAIN_SPECS:
+            domain = self.current_context
+            if cmd in ("list", "add", "edit", "delete"):
+                self.cmd_domain(domain, [cmd, *args])
+                # `edit <id>` drilled the prompt down to `<domain>/<id>`;
+                # for `add` / `list` / `delete` we stay in the domain.
+                return True
+            # Bare-id drilldown — typing `rasp1` inside `[devices]` is a
+            # muscle-memory shortcut for `edit rasp1` (matches the
+            # cartridges / testruns drilldown pattern).
+            obj = self._lookup_domain_object(domain, cmd)
+            if obj is not None:
+                self.current_context = f"{domain}/{cmd}"
+                return True
+            return False
+
+        if "/" in self.current_context:
+            domain = self.current_context.split("/", 1)[0]
+            if domain in self._DOMAIN_SPECS:
+                live_object = self._resolve_live_path(self.current_context)
+                if live_object is None:
+                    # Some link in the path was deleted out from under us.
+                    # Pop the deepest <key>/<id> pair until we land on an
+                    # ancestor that still exists (or the root domain).
+                    parts = self.current_context.split("/")
+                    while len(parts) > 1:
+                        parts = parts[:-2] if len(parts) >= 4 else [parts[0]]
+                        candidate = "/".join(parts)
+                        resolved = (
+                            self.active_operation
+                            if not candidate
+                            else self._resolve_live_path(candidate)
+                        )
+                        if resolved is not None or candidate == domain:
+                            self.current_context = candidate or domain
+                            break
+                    else:
+                        self.current_context = domain
+                    self.rich_console.print(
+                        f"[yellow]Object at path "
+                        f"{self.current_context!r} no longer exists; "
+                        f"returning to [{self.current_context or 'root'}].[/]"
+                    )
+                    return True
+
+                if cmd == "show":
+                    self._render_live_object_panel(
+                        live_object,
+                        type(live_object).__name__.lower(),
+                    )
+                    return True
+
+                if cmd == "set":
+                    if len(args) < 2:
+                        self.rich_console.print("Usage: set <prop> <value>")
+                        return True
+                    self._set_live_attr(live_object, args[0], " ".join(args[1:]))
+                    return True
+
+                # Schema-driven nested routing: ANY collection registered
+                # in ``live_object.__schema__`` becomes a CRUD surface
+                # (e.g. peripherals / vulnerabilities / services / etc.).
+                schema = getattr(live_object, "__schema__", {}) or {}
+                if cmd in schema:
+                    return self._dispatch_nested_schema(live_object, cmd, list(args))
+
+                return False
+
         return False
 
     async def _dispatch_main_commands(self, cmd: str, args: List[str]) -> bool:
@@ -3453,6 +5107,33 @@ class WintermuteConsole:
         falling through to "unknown command". Safety commands listed in
         :attr:`_SAFETY_COMMANDS` always bypass this layer.
         """
+        # Narrow exception: inside `[testruns/<run_id>]`, `show` and
+        # `status` mean "this run", not the global operation tree. Hoist
+        # them above the safety filter so the operator's intent matches
+        # the visible prompt. Other safety commands (back, exit, help)
+        # still bypass.
+        if self.current_context.startswith("testruns/") and cmd in (
+            "show",
+            "status",
+        ):
+            run_id = self.current_context.split("/", 1)[1]
+            raw = " ".join(args)
+            self.cmd_testrun_action(run_id, f"{cmd} {raw}".strip())
+            return True
+
+        # Same hoist for the new domain deep contexts: inside
+        # `[devices/<hostname>]`, `[analysts/<userid>]`, or
+        # `[users/<uid>]`, `show` means the live object's panel — not
+        # the global operation tree. The deep-context router in
+        # `_dispatch_contextual` knows what to do; we just need to make
+        # sure it gets the chance.
+        if cmd == "show" and "/" in self.current_context:
+            domain, _, _ = self.current_context.partition("/")
+            if domain in self._DOMAIN_SPECS:
+                handled = await self._dispatch_contextual(cmd, args)
+                if handled:
+                    return True
+
         if cmd not in self._SAFETY_COMMANDS:
             handled = await self._dispatch_contextual(cmd, args)
             if handled:
@@ -3466,24 +5147,12 @@ class WintermuteConsole:
                 self.cmd_operation_enter()
             return True
 
-        elif cmd == "add":
-            if not args:
-                # Bare `add` — drop into the [add] menu so the user can
-                # discover supported entity types via `help`.
-                self.current_context = "add"
-                self.rich_console.print(
-                    "Usage: add <analyst|device|user|service> [args ...]"
-                )
-                return True
-            if len(args) == 1:
-                # `add <type>` with no values — preserve the legacy
-                # interactive builder (test_console_commands relies on
-                # this exact dispatch contract).
-                entity = args[0].lower()
-                self.cmd_add_enter(entity)
-                return True
-            # `add <type> <args ...>` — strict shlex parse + append.
-            self.cmd_add(" ".join(args))
+        elif cmd in self._DOMAIN_SPECS:
+            # Top-level domain routers: `devices`, `analysts`, `users`.
+            # The legacy generic `add` menu is gone — operators discover
+            # supported entity types per domain via `help <domain>`.
+            self.current_context = cmd
+            self.cmd_domain(cmd, list(args))
             return True
 
         elif cmd == "edit" and len(args) >= 1:
@@ -3500,6 +5169,13 @@ class WintermuteConsole:
             # routes load/unload/list/run via cmd_cartridges.
             self.current_context = "cartridges"
             self.cmd_cartridges(args)
+            return True
+
+        elif cmd == "testruns":
+            # Test-run sub-menu: load plans, generate runs, drill into a
+            # specific run for status / notes / findings updates.
+            self.current_context = "testruns"
+            self.cmd_testruns(args)
             return True
 
         elif cmd == "set" and len(args) >= 2 and not self.builder_stack:
@@ -3580,12 +5256,21 @@ class WintermuteConsole:
         return False
 
     def _render_prompt(self) -> HTML:
-        """Build the prompt-toolkit HTML string from ``self.current_context``.
+        """Build the prompt-toolkit HTML string from the current state.
 
-        Uses bold for the deck name and a coloured tag for the active
-        sub-menu. When no menu is active we render the bare deck prompt
-        so the user can tell at a glance whether they are at the root.
+        Resolution order (highest priority first):
+
+        1. **Active builder.** When :attr:`builder_stack` is non-empty the
+           operator is mid-construction; surface that with
+           ``[build:<entity>]`` so a typo like ``add user ...`` inside a
+           ``device`` builder doesn't silently stack a Russian doll.
+        2. **Sub-menu marker.** :attr:`current_context` (e.g. ``mcp``,
+           ``cartridges``, ``testruns``).
+        3. **Root.** Bare deck prompt.
         """
+        if self.builder_stack:
+            active = self.builder_stack[-1].entity_name
+            return HTML(f"<b>onoSendai</b> <ansicyan>[build:{active}]</ansicyan> &gt; ")
         if self.current_context:
             return HTML(
                 f"<b>onoSendai</b> <ansicyan>[{self.current_context}]</ansicyan> &gt; "
@@ -3639,74 +5324,7 @@ class WintermuteConsole:
                 handled = False
 
                 if self.builder_stack:
-                    # --- BUILDER CONTEXT HANDLER ---
-                    handled = True
-                    if cmd == "set" and len(args) >= 2:
-                        self.cmd_builder_set(args[0], " ".join(args[1:]))
-                    elif cmd == "show":
-                        self.cmd_builder_show()
-                    elif cmd == "save" or cmd == "create":
-                        self.cmd_builder_save()
-                    elif cmd == "add" and args:
-                        # NEW STRICT ROUTING
-                        # Check for 'add peripheral <type>'
-                        if args[0] == "peripheral" and len(args) > 1:
-                            p_type = args[1].lower()
-                            if p_type in self.PERIPHERAL_MAP:
-                                self.builder_stack.append(
-                                    BuilderContext(
-                                        p_type,
-                                        self.PERIPHERAL_MAP[p_type],
-                                        parent_list_name="peripherals",
-                                    )
-                                )
-                                self.rich_console.print(
-                                    f"[*] Constructing {p_type} node..."
-                                )
-                            else:
-                                self.rich_console.print(
-                                    f"[red][!] Unknown peripheral type: {p_type}[/]"
-                                )
-
-                        # Check for 'add vulnerability'
-                        elif args[0] == "vulnerability":
-                            from wintermute.findings import Vulnerability
-
-                            self.builder_stack.append(
-                                BuilderContext(
-                                    "vulnerability",
-                                    Vulnerability,
-                                    parent_list_name="vulnerabilities",
-                                )
-                            )
-                            self.rich_console.print(
-                                "[*] Constructing vulnerability node..."
-                            )
-
-                        # Check for cloud nested types (AWS only)
-                        elif (
-                            args[0].lower() in self.CLOUD_NESTED_MAP
-                            and self._is_cloud_builder_aws()
-                        ):
-                            cloud_cls, parent_list = self.CLOUD_NESTED_MAP[
-                                args[0].lower()
-                            ]
-                            self.builder_stack.append(
-                                BuilderContext(
-                                    args[0].lower(),
-                                    cloud_cls,
-                                    parent_list_name=parent_list,
-                                )
-                            )
-                            self.rich_console.print(
-                                f"[*] Constructing {args[0].lower()} node..."
-                            )
-
-                        else:
-                            # Generic fallback for other nested items (e.g. service inside device)
-                            self.cmd_add_enter(args[0])
-                    else:
-                        handled = False  # Try global handler
+                    handled = self._dispatch_builder_command(cmd, args)
 
                 if not handled:
                     if current_context == "backend":

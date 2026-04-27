@@ -534,6 +534,7 @@ class TestCase(BaseModel):
 class TestPlan(BaseModel):
     """A plan can contain test cases and nested plans (HW, Web/API, Network)."""
 
+    __test__ = False
     __schema__ = {"test_cases": TestCase, "test_plans": "TestPlan"}
 
     code: str
