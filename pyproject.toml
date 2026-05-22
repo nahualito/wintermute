@@ -82,6 +82,10 @@ command_line = "-m pytest"
 source = ["wintermute", "tests"]
 
 [tool.hatch.build.targets.sdist]
+# Includes everything under /wintermute, including the .md profile data
+# files under wintermute/data/agent_profiles/ which are seeded into the
+# user's ~/.wintermute/agentic/profiles/ on first console startup by
+# wintermute.ai.agent.init_agent_environment().
 include = ["/wintermute"]
 
 [tool.hatch.build.targets.wheel]

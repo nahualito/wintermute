@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Union, cast
 
 import anyio
 from mcp import ClientSession, StdioServerParameters
+from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage
@@ -55,12 +56,54 @@ class MCPRuntime:
     """
     Manages the lifecycle of an MCP connection and registers its tools
     into the Wintermute ToolRegistry.
+
+    The connection is described by a config dictionary. Two transport types
+    are supported:
+
+    * ``{"type": "stdio", "command": "...", "args": [...], "env": {...}}``
+      spawns a local subprocess and speaks JSON-RPC over its stdio.
+    * ``{"type": "sse", "url": "http://host:port/sse", "headers": {...}}``
+      connects to a remote MCP server over HTTP Server-Sent Events. Used
+      for remote hardware nodes that expose their tools over the network.
+
+    For backward compatibility, the legacy stdio-only ``command``/``args``/
+    ``env`` keyword form is still accepted and internally rewritten into a
+    stdio config.
     """
 
     def __init__(
-        self, command: str, args: List[str], env: Optional[Dict[str, str]] = None
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        *,
+        command: Optional[str] = None,
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> None:
-        self.server_params = StdioServerParameters(command=command, args=args, env=env)
+        if config is None:
+            if command is None:
+                raise ValueError(
+                    "MCPRuntime requires either a 'config' dict or a legacy "
+                    "'command' argument for stdio mode"
+                )
+            config = {
+                "type": "stdio",
+                "command": command,
+                "args": list(args) if args is not None else [],
+                "env": env,
+            }
+
+        transport = config.get("type", "stdio")
+        if transport not in ("stdio", "sse"):
+            raise ValueError(
+                f"Unsupported MCP transport {transport!r}; expected 'stdio' or 'sse'"
+            )
+        if transport == "stdio" and "command" not in config:
+            raise ValueError("stdio MCP config requires a 'command' field")
+        if transport == "sse" and "url" not in config:
+            raise ValueError("sse MCP config requires a 'url' field")
+
+        self.config: Dict[str, Any] = config
+        self.transport: str = transport
         self.session: Optional[ClientSession] = None
         self._exit_stack: Optional[AsyncExitStack] = None
 
@@ -68,13 +111,29 @@ class MCPRuntime:
         """Connects to MCP and registers tools into Wintermute's global registry."""
         self._exit_stack = AsyncExitStack()
 
-        # 1. Connect
+        # 1. Connect via the configured transport.
         # We explicitly assert to satisfy mypy that _exit_stack is initialized
         assert self._exit_stack is not None
 
-        read, write = await self._exit_stack.enter_async_context(
-            stdio_client(self.server_params)
-        )
+        if self.transport == "stdio":
+            server_params = StdioServerParameters(
+                command=self.config["command"],
+                args=list(self.config.get("args", []) or []),
+                env=self.config.get("env"),
+            )
+            read, write = await self._exit_stack.enter_async_context(
+                stdio_client(server_params)
+            )
+        else:  # sse
+            streams = await self._exit_stack.enter_async_context(
+                sse_client(
+                    url=self.config["url"],
+                    headers=self.config.get("headers"),
+                )
+            )
+            # sse_client yields (read_stream, write_stream); accept extras defensively.
+            read, write = streams[0], streams[1]
+
         self.session = await self._exit_stack.enter_async_context(
             ClientSession(read, write)
         )

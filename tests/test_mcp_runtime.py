@@ -81,7 +81,7 @@ async def test_mcp_initialization_and_registration() -> None:
 @pytest.mark.asyncio
 async def test_mcp_tool_execution() -> None:
     # Setup Runtime with a mock session already injected
-    runtime = MCPRuntime("echo", [])
+    runtime = MCPRuntime({"type": "stdio", "command": "echo", "args": []})
     mock_session = AsyncMock()
     runtime.session = mock_session
 

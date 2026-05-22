@@ -208,14 +208,19 @@ async def test_cmd_ai_rag_off(console: WintermuteConsole) -> None:
 
 @pytest.mark.asyncio
 async def test_cmd_ai_chat(console: WintermuteConsole) -> None:
-    console.ai_router = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.content = "Hello"
-    mock_resp.tool_calls = []
-    with patch(
-        "wintermute.WintermuteConsole.tool_calling_chat", return_value=mock_resp
-    ):
-        await console.cmd_ai("chat", "hi")
+    # Supervisor REPL path: ai_router.choose() returns a provider whose
+    # chat() yields the final assistant turn (no tool calls -> loop exits).
+    from wintermute.ai.types import ChatResponse
+
+    fake_router = MagicMock()
+    fake_provider = MagicMock()
+    fake_provider.chat.return_value = ChatResponse(content="Hello")
+    fake_router.choose.return_value = (fake_provider, MagicMock())
+    fake_router.default_model = "test-model"
+    console.ai_router = fake_router
+
+    await console.cmd_ai("chat", "hi")
+    fake_provider.chat.assert_called_once()
 
 
 def test_scan_backends(console: WintermuteConsole) -> None:

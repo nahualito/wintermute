@@ -28,11 +28,17 @@ from rich.status import Status
 from rich.table import Table
 from rich.tree import Tree
 
+from wintermute.ai.agent import (
+    DEFAULT_IMPLEMENTATIONS_DIR,
+    WorkerAgent,
+    init_agent_environment,
+)
 from wintermute.ai.bootstrap import bootstrap_rags, init_router
+from wintermute.ai.jobs import AgentJobManager
 from wintermute.ai.provider import Router, llms
 from wintermute.ai.tools_runtime import ToolsRuntime
 from wintermute.ai.tools_runtime import tools as global_tool_registry
-from wintermute.ai.use import tool_calling_chat
+from wintermute.ai.types import ChatRequest, Message, ToolSpec
 from wintermute.ai.utils.tool_factory import register_tools
 from wintermute.backends.json_storage import JsonFileBackend
 from wintermute.basemodels import CloudAccount
@@ -143,6 +149,20 @@ class WintermuteConsole:
         # background asyncio loop on a daemon thread. Instantiation is cheap;
         # the loop only spins up when the operator first runs `mcp start`.
         self.mcp_manager = MCPClientManager()
+
+        # Background job manager for spawned WorkerAgents. Supervisor REPL
+        # uses this exclusively (via the `spawn_agent` tool); operator can
+        # poll via `ai agent status [job_id]`.
+        self.job_manager: AgentJobManager = AgentJobManager()
+
+        # First-run seeding: copy the bundled default agent profiles from
+        # the wintermute.data.agent_profiles package into the user's
+        # ~/.wintermute/agentic/profiles/ directory. Idempotent — never
+        # overwrites local edits.
+        try:
+            init_agent_environment()
+        except Exception as exc:  # noqa: BLE001 — never block startup
+            logger.warning("init_agent_environment failed: %s", exc)
 
         # Local context (Cartridge)
         self.context_stack: List[str] = ["wintermute"]
@@ -2473,66 +2493,306 @@ class WintermuteConsole:
             else:
                 self.rich_console.print(f"Unknown RAG command: {rag_action}")
 
-        elif sub == "chat" or (sub not in ["model", "rag"]):
-            # Default to chat if not 'model' or 'rag'
+        elif sub == "agent":
+            await self._cmd_ai_agent(list(args[1:]))
+
+        elif sub == "chat" or (sub not in ["model", "rag", "agent"]):
+            # The supervisor REPL. The REPL itself is the high-level
+            # Orchestrator: it speaks only to the LLM with its three
+            # exclusive native tools (generate_implementation_file,
+            # spawn_agent, check_agent_status). Worker tools live with
+            # WorkerAgents spawned via the job manager — the supervisor
+            # never sees the global cartridge tool surface, by design.
             prompt = " ".join(args[1:]) if sub == "chat" else " ".join(args)
             if not prompt:
                 self.rich_console.print("Usage: ai chat <prompt>")
                 return
 
-            with Status("[bold blue]AI is thinking...", spinner="dots"):
-                from wintermute.ai.types import Message, ToolSpec
+            with Status("[bold blue]Supervisor thinking...", spinner="dots"):
+                final = await self._run_supervisor(prompt)
 
-                # Fetch all registered tools for the context
-                raw_tools = await self.tools_runtime.get_all_tools()
-                tool_specs = [
-                    ToolSpec(
-                        name=t["function"]["name"],
-                        description=t["function"]["description"],
-                        input_schema=t["function"]["parameters"],
-                        output_schema={},  # Simplified
-                    )
-                    for t in raw_tools
-                ]
-                # Critical agentic hook: extend the visible tool surface with
-                # whatever external MCP servers the operator has connected via
-                # `mcp start`. Lets the LLM autonomously call Ghidra / Binary
-                # Ninja / etc. alongside Wintermute's hardware cartridges.
-                try:
-                    tool_specs.extend(self.mcp_manager.get_all_external_tools())
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to fetch external MCP tools for chat: %s", exc
-                    )
-
-                messages = [Message(role="user", content=prompt)]
-
-                # Use tool_calling_chat instead of simple_chat to handle complex responses
-                resp = tool_calling_chat(
-                    self.ai_router,
-                    messages,
-                    tools=tool_specs,
-                    model=self.ai_router.default_model,
-                )
-
-            # Display content if present
-            if resp.content:
+            if final:
                 self.rich_console.print(
-                    Panel(resp.content, title="Wintermute AI", border_style="blue")
+                    Panel(final, title="Wintermute Supervisor", border_style="blue")
                 )
 
-            # Display tool calls if present
-            if resp.tool_calls:
-                t_table = Table(title="AI Tool Calls Requested")
-                t_table.add_column("ID", style="cyan")
-                t_table.add_column("Tool", style="magenta")
-                t_table.add_column("Arguments", style="white")
-                for tc in resp.tool_calls:
-                    t_table.add_row(tc.id, tc.name, str(tc.arguments))
-                self.rich_console.print(t_table)
+    # -----------------------------------------------------------------
+    # Supervisor REPL — Phase 4 Orchestrator
+    # -----------------------------------------------------------------
 
-                # Optional: Logic to actually execute them and loop back could go here
-                # For now, we just show them as requested by user.
+    SUPERVISOR_SYSTEM_PROMPT: ClassVar[str] = (
+        "You are the Wintermute Supervisor — the high-level orchestrator of a "
+        "multi-agent hardware-security framework. You do NOT execute hardware "
+        "tools yourself. Instead, you delegate to specialist WorkerAgents.\n\n"
+        "Your only three tools are:\n"
+        "  1. generate_implementation_file(content, filename) — write a "
+        "step-by-step plan to ~/.wintermute/agentic/implementations/<filename>.\n"
+        "  2. spawn_agent(profile, implementation_file, mode) — instantiate a "
+        "WorkerAgent from a profile (~/.wintermute/agentic/profiles/<profile>.md), "
+        "load the implementation, and schedule it via the AgentJobManager. "
+        "`mode` is 'background' (default) or 'foreground'.\n"
+        "  3. check_agent_status(job_id) — poll a previously spawned job.\n\n"
+        "If the operator asks a simple factual question that requires no "
+        "delegation, just answer directly. Only use the tools when the task "
+        "requires running specialist work."
+    )
+
+    SUPERVISOR_TOOL_SPECS: ClassVar[List[Dict[str, Any]]] = [
+        {
+            "name": "generate_implementation_file",
+            "description": (
+                "Write a step-by-step execution plan to "
+                "~/.wintermute/agentic/implementations/<filename>. Returns the "
+                "absolute path of the file written."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Markdown body of the implementation plan.",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Filename (e.g. 'tpm_quote_verify.md').",
+                    },
+                },
+                "required": ["content", "filename"],
+            },
+        },
+        {
+            "name": "spawn_agent",
+            "description": (
+                "Spawn a WorkerAgent from a markdown profile and queue it on "
+                "the AgentJobManager. Returns either a job_id (background) or "
+                "the agent's final output (foreground)."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "profile": {
+                        "type": "string",
+                        "description": (
+                            "Profile name (without .md), looked up in "
+                            "~/.wintermute/agentic/profiles/."
+                        ),
+                    },
+                    "implementation_file": {
+                        "type": "string",
+                        "description": (
+                            "Filename relative to "
+                            "~/.wintermute/agentic/implementations/."
+                        ),
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["background", "foreground"],
+                        "description": "'background' (default) returns a job_id immediately.",
+                    },
+                },
+                "required": ["profile", "implementation_file"],
+            },
+        },
+        {
+            "name": "check_agent_status",
+            "description": "Poll a previously spawned agent by job_id.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Job id returned by spawn_agent.",
+                    },
+                },
+                "required": ["job_id"],
+            },
+        },
+    ]
+
+    SUPERVISOR_MAX_ITERATIONS: ClassVar[int] = 12
+
+    def _supervisor_tool_specs(self) -> List[ToolSpec]:
+        return [
+            ToolSpec(
+                name=t["name"],
+                description=t["description"],
+                input_schema=t["input_schema"],
+                output_schema={},
+            )
+            for t in self.SUPERVISOR_TOOL_SPECS
+        ]
+
+    async def _supervisor_dispatch(self, name: str, args: Dict[str, Any]) -> str:
+        """Execute one Supervisor-native tool call. Always returns a string
+        suitable for the ``role='tool'`` message that feeds back into the
+        next LLM turn.
+        """
+        if name == "generate_implementation_file":
+            content = str(args.get("content", ""))
+            filename = str(args.get("filename", "")).strip()
+            if not filename:
+                return json.dumps({"error": "filename is required"})
+            target = DEFAULT_IMPLEMENTATIONS_DIR / filename
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            except OSError as exc:
+                return json.dumps({"error": f"write failed: {exc}"})
+            return json.dumps({"path": str(target), "bytes": len(content)})
+
+        if name == "spawn_agent":
+            if self.ai_router is None:
+                return json.dumps({"error": "AI router not initialised"})
+            profile = str(args.get("profile", "")).strip()
+            impl_file = str(args.get("implementation_file", "")).strip()
+            mode = str(args.get("mode", "background")).strip().lower() or "background"
+            if not profile or not impl_file:
+                return json.dumps(
+                    {"error": "profile and implementation_file are required"}
+                )
+            try:
+                agent = WorkerAgent(router=self.ai_router)
+                agent.load_profile(profile)
+                agent.load_implementation(impl_file)
+            except FileNotFoundError as exc:
+                return json.dumps({"error": str(exc)})
+            # Plumb global-registry tools into the agent's isolated
+            # registry — only the ones the profile allow-lists.
+            for tname in agent.allowed_tools:
+                tool = global_tool_registry._tools.get(tname)
+                if tool is not None:
+                    agent.register_tool(tool)
+            if mode == "foreground":
+                try:
+                    output = await agent.run()
+                except Exception as exc:  # noqa: BLE001 — surface to LLM
+                    return json.dumps({"error": f"agent raised: {exc}"})
+                return json.dumps({"mode": "foreground", "output": output})
+            job_id = await self.job_manager.spawn_job(agent)
+            return json.dumps(
+                {"mode": "background", "job_id": job_id, "agent_name": agent.name}
+            )
+
+        if name == "check_agent_status":
+            job_id = str(args.get("job_id", "")).strip()
+            if not job_id:
+                return json.dumps({"error": "job_id is required"})
+            snap = await self.job_manager.get_status(job_id)
+            if snap is None:
+                return json.dumps({"error": f"unknown job_id {job_id!r}"})
+            return json.dumps(snap, default=str)
+
+        return json.dumps({"error": f"unknown supervisor tool {name!r}"})
+
+    async def _run_supervisor(self, prompt: str) -> str:
+        """Run the bounded supervisor tool-calling loop.
+
+        Mirrors :meth:`WorkerAgent.run` (same frozen-Message bypass and
+        same arguments-string/parsed-dict split for LiteLLM history vs.
+        local execution), but the toolset is locked to the three
+        supervisor-native tools defined above.
+        """
+        if self.ai_router is None:
+            return "[!] AI router not initialised."
+
+        messages: List[Message] = [
+            Message(role="system", content=self.SUPERVISOR_SYSTEM_PROMPT),
+            Message(role="user", content=prompt),
+        ]
+        tool_specs = self._supervisor_tool_specs()
+
+        iteration = 0
+        while True:
+            if iteration >= self.SUPERVISOR_MAX_ITERATIONS:
+                return (
+                    "[Supervisor] Iteration cap reached "
+                    f"({self.SUPERVISOR_MAX_ITERATIONS}) without finishing."
+                )
+            iteration += 1
+
+            req = ChatRequest(
+                messages=messages,
+                tools=tool_specs,
+                model=self.ai_router.default_model,
+                tool_choice="auto",
+            )
+            provider, chosen = self.ai_router.choose(req)
+            resp = provider.chat(chosen)
+
+            if not resp.tool_calls:
+                return resp.content or ""
+
+            formatted_tool_calls = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": tc.arguments
+                        if isinstance(tc.arguments, str)
+                        else json.dumps(tc.arguments),
+                    },
+                }
+                for tc in resp.tool_calls
+            ]
+            assistant_msg = Message(role="assistant", content=resp.content or "")
+            # Dataclass bypass per AGENT_REFACTOR_PLAN architectural rules.
+            object.__setattr__(assistant_msg, "tool_calls", formatted_tool_calls)
+            messages.append(assistant_msg)
+
+            for tc in resp.tool_calls:
+                if isinstance(tc.arguments, str):
+                    try:
+                        parsed: Dict[str, Any] = (
+                            json.loads(tc.arguments) if tc.arguments else {}
+                        )
+                    except json.JSONDecodeError:
+                        parsed = {}
+                else:
+                    parsed = dict(tc.arguments)
+                tool_output = await self._supervisor_dispatch(tc.name, parsed)
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=tool_output,
+                        tool_name=tc.name,
+                        tool_call_id=tc.id,
+                    )
+                )
+
+    async def _cmd_ai_agent(self, args: List[str]) -> None:
+        """Operator-facing inspection of the background job manager.
+
+        Supports ``ai agent status`` (list all jobs) and
+        ``ai agent status <job_id>`` (single-job snapshot).
+        """
+        if not args or args[0] != "status":
+            self.rich_console.print("Usage: ai agent status [job_id]")
+            return
+        if len(args) >= 2:
+            job_id = args[1]
+            snap = await self.job_manager.get_status(job_id)
+            if snap is None:
+                self.rich_console.print(f"[red][!] Unknown job_id: {job_id}[/]")
+                return
+            t = Table(title=f"Agent Job {job_id}")
+            t.add_column("Field", style="cyan")
+            t.add_column("Value", style="white")
+            for k, v in snap.items():
+                t.add_row(k, str(v))
+            self.rich_console.print(t)
+            return
+        jobs = await self.job_manager.list_jobs()
+        if not jobs:
+            self.rich_console.print("[*] No agent jobs have been spawned this session.")
+            return
+        t = Table(title="Agent Jobs")
+        t.add_column("job_id", style="cyan")
+        t.add_column("agent", style="magenta")
+        t.add_column("status", style="green")
+        for j in jobs:
+            t.add_row(j["job_id"], j.get("agent_name", ""), j["status"])
+        self.rich_console.print(t)
 
     async def cmd_backend_enter(self) -> None:
         """Push backend context."""
