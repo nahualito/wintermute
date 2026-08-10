@@ -90,7 +90,7 @@ from wintermute.core import (
 )
 from wintermute.findings import ReproductionStep, Vulnerability
 from wintermute.hardware import Architecture, Processor
-from wintermute.peripherals import JTAG, UART
+from wintermute.peripherals import JTAG, UART, RenodeEmulator
 from wintermute.reports import Report, ReportSpec
 from wintermute.tickets import InMemoryBackend, Status, Ticket
 from wintermute.utils.findings import (
@@ -1025,20 +1025,25 @@ async def add_peripheral_to_device(
     device_path: str | None = None,
     pins_json: str | None = None,
     baudrate: int | None = None,
+    monitor_port: int | None = None,
+    gdb_port: int | None = None,
 ) -> str:
-    """Attach a hardware debug peripheral (UART, JTAG, etc.) to a Device.
+    """Attach a hardware debug peripheral (UART, JTAG, RENODE, etc.) to a Device.
 
     Use this after identifying physical debug interfaces on an embedded target.
 
     Args:
         device_id: Registry ID of the target Device.
-        peripheral_type: One of ``"UART"`` or ``"JTAG"``.  Other types can be
-                         added via the Wintermute library directly.
+        peripheral_type: One of ``"UART"``, ``"JTAG"``, or ``"RENODE"``.
+                         Other types can be added via the Wintermute library
+                         directly.
         name: Human-readable label (e.g. ``"debug-uart"``).
         device_path: OS device path (e.g. ``"/dev/ttyUSB0"``).
         pins_json: JSON object mapping pin names to board locations
                    (e.g. ``'{"tx":"J3-1","rx":"J3-2","gnd":"J3-3"}'``).
-        baudrate: Baud rate for UART peripherals (ignored for JTAG).
+        baudrate: Baud rate for UART peripherals (ignored for JTAG/RENODE).
+        monitor_port: Renode Monitor telnet port (default 1234, RENODE only).
+        gdb_port: Renode GDB server port (default 3333, RENODE only).
 
     Returns:
         The peripheral's registry string ID.
@@ -1054,16 +1059,25 @@ async def add_peripheral_to_device(
     ptype = peripheral_type.upper()
     label = name or f"{ptype.lower()}-{len(dev.peripherals)}"
     dpath = device_path or ""
-    periph: UART | JTAG
+    periph: UART | JTAG | RenodeEmulator
     if ptype == "UART":
         periph = UART(
             device_path=dpath, name=label, pins=pins, baudrate=baudrate or 115200
         )
     elif ptype == "JTAG":
         periph = JTAG(device_path=dpath, name=label, pins=pins)
+    elif ptype == "RENODE":
+        periph = RenodeEmulator(
+            device_path=dpath,
+            name=label,
+            pins=pins,
+            monitor_port=monitor_port or 1234,
+            gdb_port=gdb_port or 3333,
+        )
     else:
         return (
-            f"Unsupported peripheral_type: '{peripheral_type}'. Use 'UART' or 'JTAG'."
+            f"Unsupported peripheral_type: '{peripheral_type}'. "
+            f"Use 'UART', 'JTAG', or 'RENODE'."
         )
 
     dev.peripherals.append(periph)

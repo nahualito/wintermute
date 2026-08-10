@@ -853,3 +853,59 @@ class TPM(Peripheral):
         if self.version == "2.0":
             raise NotImplementedError("TPM 2.0 auth uses the tpm20 cartridge")
         return self._tpm12_op_auth_req_body(operator_auth)
+
+
+class RenodeEmulator(Peripheral):
+    """Peripheral representing a Renode-emulated device.
+
+    Captures connection metadata for the Renode Monitor telnet console
+    and the built-in GDB server so that the
+    :class:`~wintermute.cartridges.renode.RenodeCartridge` can be
+    configured from this peripheral's attributes.
+
+    Examples:
+        >>> emu = RenodeEmulator(
+        ...     name="stm32",
+        ...     monitor_host="localhost",
+        ...     monitor_port=1234,
+        ...     gdb_port=3333,
+        ...     platform_description="stm32f4.repl",
+        ... )
+        >>> print(emu.name, emu.monitor_port, emu.gdb_port)
+        stm32 1234 3333
+
+    Attributes:
+        monitor_host: Hostname or IP of the Renode Monitor telnet console.
+        monitor_port: TCP port for the Renode Monitor (default 1234).
+        gdb_port: TCP port for the Renode GDB server (default 3333).
+        platform_description: Path or name of the ``.repl`` platform file.
+        script_path: Path to the ``.resc`` setup script.
+    """
+
+    def __init__(
+        self,
+        device_path: str = "",
+        name: str = "",
+        pins: Dict[Any, Any] = {},
+        pType: PeripheralType = PeripheralType.Emulator,
+        monitor_host: str = "localhost",
+        monitor_port: int = 1234,
+        gdb_port: int = 3333,
+        platform_description: str = "",
+        script_path: str = "",
+        vulnerabilities: Optional[List[Vulnerability | dict[str, Any]]] = None,
+    ) -> None:
+        self.pType = pType
+        self.monitor_host = monitor_host
+        self.monitor_port = monitor_port
+        self.gdb_port = gdb_port
+        self.platform_description = platform_description
+        self.script_path = script_path
+
+        super().__init__(
+            device_path, name, pins, pType, vulnerabilities=vulnerabilities
+        )
+        log.info(
+            f"Initialized RenodeEmulator peripheral {name} "
+            f"(monitor={monitor_host}:{monitor_port}, gdb_port={gdb_port})"
+        )

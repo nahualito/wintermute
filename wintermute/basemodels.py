@@ -308,6 +308,7 @@ class PeripheralType(Enum):
     PCIe = 0x0C
     CAN = 0x0D
     SFP = 0x0E
+    Emulator = 0x0F
 
 
 class Peripheral(BaseModel):

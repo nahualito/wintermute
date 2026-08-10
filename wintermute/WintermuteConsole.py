@@ -66,6 +66,7 @@ from wintermute.peripherals import (
     Bluetooth,
     Ethernet,
     PCIe,
+    RenodeEmulator,
     Wifi,
 )
 from wintermute.reports import Report
@@ -193,6 +194,7 @@ class WintermuteConsole:
             "bluetooth": Bluetooth,
             "usb": USB,
             "pcie": PCIe,
+            "renodeemulator": RenodeEmulator,
             "processor": Processor,
             "architecture": Architecture,
             "memory": Memory,
@@ -208,6 +210,7 @@ class WintermuteConsole:
             "bluetooth": Bluetooth,
             "usb": USB,
             "pcie": PCIe,
+            "renodeemulator": RenodeEmulator,
         }
 
         self.CLOUD_NESTED_MAP: dict[str, tuple[type[Any], str]] = {
