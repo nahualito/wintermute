@@ -32,7 +32,14 @@ from typing import Callable, Dict, List, Union
 
 import pytest
 
-from wintermute.protocols.gdb import GDBClient, GDBConfig, GDBError
+from wintermute.protocols.gdb import (
+    ARCH_REGISTERS,
+    GDBClient,
+    GDBConfig,
+    GDBError,
+    _detect_arch,
+    _parse_register_blob,
+)
 
 # ---------------------------------------------------------------------------
 # Fake GDB server for testing
@@ -198,13 +205,17 @@ class TestGDBConnection:
 
 class TestGDBRegisters:
     def test_read_registers(self, gdb_server: FakeGDBServer) -> None:
-        reg_blob = "deadbeef" * 16
+        reg_blob = "deadbeef" * 33
         gdb_server.responses = {"g": reg_blob}
         gdb_server.start()
         client = _make_client(gdb_server)
         with client:
             result = client.read_registers()
             assert result["raw"] == reg_blob
+            assert result["zero"] == "0xefbeadde"
+            assert result["ra"] == "0xefbeadde"
+            assert result["pc"] == "0xefbeadde"
+            assert "sp" in result
         assert "g" in gdb_server.history
 
     def test_read_single_register(self, gdb_server: FakeGDBServer) -> None:
@@ -367,3 +378,68 @@ class TestGDBWatchpoints:
         with client:
             with pytest.raises(ValueError, match="Unknown watchpoint type"):
                 client.remove_watchpoint(0x20000000, 4, "bad")
+
+
+# ---------------------------------------------------------------------------
+# Register parsing and architecture detection
+# ---------------------------------------------------------------------------
+
+
+class TestRegisterParsing:
+    def test_rv32_parse(self) -> None:
+        blob = "01000000" * 33
+        regs = _parse_register_blob(blob, ARCH_REGISTERS["rv32"][0], 4)
+        assert regs["zero"] == "0x00000001"
+        assert regs["pc"] == "0x00000001"
+        assert regs["raw"] == blob
+
+    def test_arm32_parse(self) -> None:
+        blob = "efbeadde" * 17
+        names, width = ARCH_REGISTERS["arm32"]
+        regs = _parse_register_blob(blob, names, width)
+        assert regs["r0"] == "0xdeadbeef"
+        assert regs["cpsr"] == "0xdeadbeef"
+        assert "pc" in regs
+
+    def test_aarch64_parse(self) -> None:
+        blob = "efbeaddeefbeadde" * 34
+        names, width = ARCH_REGISTERS["aarch64"]
+        regs = _parse_register_blob(blob, names, width)
+        assert regs["x0"] == "0xdeadbeefdeadbeef"
+        assert regs["pc"] in regs.values()
+
+    def test_detect_rv32(self) -> None:
+        names, width = _detect_arch(33 * 8)
+        assert width == 4
+        assert "ra" in names
+
+    def test_detect_arm32(self) -> None:
+        names, width = _detect_arch(17 * 8)
+        assert width == 4
+        assert "cpsr" in names
+
+    def test_detect_aarch64(self) -> None:
+        names, width = _detect_arch(34 * 16)
+        assert width == 8
+        assert "x0" in names
+
+    def test_detect_unknown_falls_back_to_rv32(self) -> None:
+        names, width = _detect_arch(7)
+        assert width == 4
+        assert names[0] == "zero"
+
+    def test_explicit_arch_config(self, gdb_server: FakeGDBServer) -> None:
+        blob = "efbeadde" * 17
+        gdb_server.responses = {"g": blob}
+        gdb_server.start()
+        config = GDBConfig(
+            host="127.0.0.1",
+            port=gdb_server.port,
+            arch="arm32",
+        )
+        client = GDBClient(config)
+        with client:
+            regs = client.read_registers()
+            assert "r0" in regs
+            assert "cpsr" in regs
+            assert regs["r0"] == "0xdeadbeef"

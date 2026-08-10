@@ -33,7 +33,7 @@ import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Final, List, Union
+from typing import Callable, Dict, Final, List, Union
 
 from pydantic import BaseModel, Field
 
@@ -168,7 +168,11 @@ class RenodeMonitorTransport:
             except OSError:
                 log.debug("Failed to send telnet negotiation", exc_info=True)
 
-    def drain_startup(self, timeout: int = 120) -> str:
+    def drain_startup(
+        self,
+        timeout: int = 120,
+        progress_cb: Union[Callable[[float, int], None], None] = None,
+    ) -> str:
         """Drain remaining startup command output until the next prompt.
 
         After connecting, Renode may still be executing the ``-e``
@@ -178,11 +182,13 @@ class RenodeMonitorTransport:
 
         Args:
             timeout: Maximum seconds to wait for startup to finish.
+            progress_cb: Called periodically with ``(elapsed_seconds,
+                bytes_received)`` to report progress during long waits.
 
         Returns:
             The raw output from the startup command.
         """
-        return self._read_until_prompt(timeout)
+        return self._read_until_prompt(timeout, progress_cb=progress_cb)
 
     @staticmethod
     def _strip_telnet(data: bytes) -> bytes:
@@ -194,28 +200,41 @@ class RenodeMonitorTransport:
         """Remove ANSI escape sequences from text."""
         return _ANSI_ESCAPE.sub("", text)
 
-    def _read_until_prompt(self, timeout: int) -> str:
+    def _read_until_prompt(
+        self,
+        timeout: int,
+        progress_cb: Union[Callable[[float, int], None], None] = None,
+    ) -> str:
         if self._sock is None:
             raise RuntimeError("RenodeMonitorTransport is not connected")
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         buffer = bytearray()
+        last_progress = start
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(
                     f"Timed out waiting for Renode Monitor prompt after {timeout}s"
                 )
-            self._sock.settimeout(remaining)
+            self._sock.settimeout(min(remaining, 5.0))
             try:
                 chunk = self._sock.recv(4096)
-            except socket.timeout as exc:
-                raise TimeoutError(
-                    f"Timed out reading from Renode Monitor: {exc}"
-                ) from exc
+            except socket.timeout:
+                if progress_cb is not None:
+                    elapsed = time.monotonic() - start
+                    progress_cb(elapsed, len(buffer))
+                    last_progress = time.monotonic()
+                continue
             if not chunk:
                 raise ConnectionError("Renode Monitor closed the connection")
             buffer.extend(chunk)
             self._negotiate_telnet(chunk)
+            if progress_cb is not None:
+                now = time.monotonic()
+                if now - last_progress >= 5.0:
+                    progress_cb(now - start, len(buffer))
+                    last_progress = now
             cleaned = self._strip_telnet(buffer)
             text = cleaned.decode(self.config.encoding, errors="replace")
             stripped = self._strip_ansi(text)
@@ -311,6 +330,7 @@ class RenodeCartridge:
         startup_command: str = "",
         monitor_port: int = 1234,
         extra_args: Union[List[str], None] = None,
+        startup_timeout: int = 300,
     ) -> bool:
         """Launch Renode as a subprocess and connect the Monitor transport.
 
@@ -326,6 +346,9 @@ class RenodeCartridge:
             monitor_port: TCP port for the Monitor telnet console.
             extra_args: Additional CLI arguments for the ``renode``
                 binary.
+            startup_timeout: Maximum seconds to wait for the startup
+                command to finish.  C# peripheral compilation on a
+                cold cache can take several minutes.  Defaults to 300.
 
         Returns:
             ``True`` if Renode started and the Monitor connected.
@@ -348,19 +371,23 @@ class RenodeCartridge:
             cmd.extend(extra_args)
 
         log.info("Launching Renode: %s", " ".join(cmd))
+        print(
+            "[*] Starting Renode... (first run may compile C# peripherals, "
+            "this can take several minutes)"
+        )
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
 
-        # Wait for the Monitor port to accept connections.
-        # Large startup commands (compiling C# peripherals) can take 30+ seconds.
         config = RenodeMonitorConfig(
-            host="127.0.0.1", port=monitor_port, default_timeout=60
+            host="127.0.0.1", port=monitor_port, default_timeout=startup_timeout
         )
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + startup_timeout
         connected = False
+        poll_start = time.monotonic()
+        last_msg = poll_start
         while time.monotonic() < deadline:
             try:
                 sock = socket.create_connection((config.host, config.port), timeout=1)
@@ -378,23 +405,39 @@ class RenodeCartridge:
                         f"Renode exited with code {self._process.returncode}: "
                         f"{stderr_text}"
                     )
+                now = time.monotonic()
+                if now - last_msg >= 10.0:
+                    elapsed = int(now - poll_start)
+                    print(
+                        f"[*] Waiting for Renode Monitor port {monitor_port}... "
+                        f"({elapsed}s elapsed)"
+                    )
+                    last_msg = now
                 time.sleep(0.5)
 
         if not connected:
             self.shutdown()
             raise TimeoutError(
                 f"Renode Monitor did not become available on port {monitor_port} "
-                "within 60 seconds"
+                f"within {startup_timeout} seconds"
             )
 
+        print("[+] Renode Monitor port is up, connecting...")
         self.monitor = RenodeMonitorTransport(config)
         self.monitor.connect()
         log.info("Connected to Renode Monitor on port %d", monitor_port)
 
         if startup_command:
-            log.info("Waiting for startup command to finish...")
-            self.monitor.drain_startup(timeout=120)
-            log.info("Startup command completed")
+            print("[*] Executing startup command (compiling peripherals)...")
+
+            def _progress(elapsed: float, nbytes: int) -> None:
+                print(
+                    f"[*] Still loading... {elapsed:.0f}s elapsed, "
+                    f"{nbytes} bytes received"
+                )
+
+            self.monitor.drain_startup(timeout=startup_timeout, progress_cb=_progress)
+            print("[+] Startup command completed")
 
         return True
 
@@ -659,8 +702,9 @@ class RenodeCartridge:
         """Read all general-purpose registers via the GDB client.
 
         Returns:
-            A dictionary with a ``"raw"`` key containing the hex-encoded
-            register file.
+            A dictionary mapping each register ABI name (e.g. ``"ra"``,
+            ``"sp"``, ``"pc"``) to its ``0x``-prefixed value.  A
+            ``"raw"`` key holds the original hex blob.
         """
         return self._require_gdb().read_registers()
 

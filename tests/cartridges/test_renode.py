@@ -112,7 +112,9 @@ class FakeGDBClient(GDBClient):
 
     def read_registers(self) -> dict[str, str]:
         self.history.append("read_registers")
-        result = self._responses.get("read_registers", {"raw": "deadbeef" * 16})
+        result = self._responses.get(
+            "read_registers", {"raw": "deadbeef" * 33, "zero": "0xefbeadde"}
+        )
         assert isinstance(result, dict)
         return result
 

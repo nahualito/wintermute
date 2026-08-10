@@ -37,6 +37,124 @@ log = logging.getLogger(__name__)
 
 _STOP_REPLY = re.compile(r"^[STW]")
 
+_RV32_REGS: list[str] = [
+    "zero",
+    "ra",
+    "sp",
+    "gp",
+    "tp",
+    "t0",
+    "t1",
+    "t2",
+    "s0",
+    "s1",
+    "a0",
+    "a1",
+    "a2",
+    "a3",
+    "a4",
+    "a5",
+    "a6",
+    "a7",
+    "s2",
+    "s3",
+    "s4",
+    "s5",
+    "s6",
+    "s7",
+    "s8",
+    "s9",
+    "s10",
+    "s11",
+    "t3",
+    "t4",
+    "t5",
+    "t6",
+    "pc",
+]
+
+_RV64_REGS: list[str] = list(_RV32_REGS)
+
+_ARM32_REGS: list[str] = [
+    "r0",
+    "r1",
+    "r2",
+    "r3",
+    "r4",
+    "r5",
+    "r6",
+    "r7",
+    "r8",
+    "r9",
+    "r10",
+    "r11",
+    "r12",
+    "sp",
+    "lr",
+    "pc",
+    "cpsr",
+]
+
+_AARCH64_REGS: list[str] = [
+    *[f"x{i}" for i in range(31)],
+    "sp",
+    "pc",
+    "cpsr",
+]
+
+ARCH_REGISTERS: dict[str, tuple[list[str], int]] = {
+    "rv32": (_RV32_REGS, 4),
+    "rv64": (_RV64_REGS, 8),
+    "arm32": (_ARM32_REGS, 4),
+    "aarch64": (_AARCH64_REGS, 8),
+}
+
+
+def _detect_arch(blob_len: int) -> tuple[list[str], int]:
+    """Guess architecture from the ``g`` packet blob length."""
+    hex_chars = blob_len
+    candidates: dict[str, tuple[list[str], int]] = {
+        name: (names, width)
+        for name, (names, width) in ARCH_REGISTERS.items()
+        if len(names) * width * 2 <= hex_chars
+    }
+    if not candidates:
+        return (_RV32_REGS, 4)
+    exact = [
+        (names, width)
+        for names, width in candidates.values()
+        if len(names) * width * 2 == hex_chars
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    return (_RV32_REGS, 4)
+
+
+def _parse_register_blob(
+    blob: str,
+    names: list[str],
+    reg_bytes: int = 4,
+) -> dict[str, str]:
+    """Parse a GDB ``g`` packet blob into named registers.
+
+    Each register is ``reg_bytes`` bytes encoded as little-endian hex in
+    the blob.  Returns a dict mapping register names to ``0x``-prefixed
+    big-endian hex strings.  Any trailing data beyond the named
+    registers is included under the ``"raw"`` key.
+    """
+    chars_per_reg = reg_bytes * 2
+    regs: dict[str, str] = {}
+    for i, name in enumerate(names):
+        start = i * chars_per_reg
+        end = start + chars_per_reg
+        if end > len(blob):
+            break
+        le_hex = blob[start:end]
+        value = int.from_bytes(bytes.fromhex(le_hex), "little")
+        regs[name] = f"0x{value:0{chars_per_reg}x}"
+    regs["raw"] = blob
+    return regs
+
 
 class GDBConfig(BaseModel):
     """Connection settings for a GDB Remote Serial Protocol server."""
@@ -46,6 +164,8 @@ class GDBConfig(BaseModel):
     encoding: str = "utf-8"
     default_timeout: int = Field(default=10, ge=1)
     execution_timeout: int = Field(default=30, ge=1)
+    arch: str = Field(default="auto")
+    register_names: list[str] = Field(default_factory=list)
 
 
 class GDBError(RuntimeError):
@@ -175,15 +295,33 @@ class GDBClient:
 
     # -- register operations --------------------------------------------------
 
+    def _resolve_register_map(self, blob: str) -> tuple[list[str], int]:
+        """Pick register names and width from config or auto-detection."""
+        if self.config.register_names:
+            arch = self.config.arch
+            if arch in ARCH_REGISTERS:
+                _, width = ARCH_REGISTERS[arch]
+            else:
+                width = 4
+            return (self.config.register_names, width)
+        if self.config.arch != "auto" and self.config.arch in ARCH_REGISTERS:
+            return ARCH_REGISTERS[self.config.arch]
+        return _detect_arch(len(blob))
+
     def read_registers(self) -> dict[str, str]:
         """Read all general-purpose registers.
 
-        Returns a dictionary mapping ``"raw"`` to the full hex-encoded
-        register file blob returned by the GDB ``g`` packet.
+        Returns a dictionary mapping each register ABI name (e.g.
+        ``"ra"``, ``"sp"``, ``"pc"``) to its ``0x``-prefixed value.
+        A ``"raw"`` key holds the original hex blob.  The register
+        layout is determined by the ``arch`` config (``"rv32"``,
+        ``"rv64"``, ``"arm32"``, ``"aarch64"``) or auto-detected from
+        the blob size.
         """
         response = self._command("g")
         self._check_error(response)
-        return {"raw": response}
+        names, width = self._resolve_register_map(response)
+        return _parse_register_blob(response, names, width)
 
     def read_register(self, reg_num: int) -> str:
         """Read a single register by its GDB register number.
