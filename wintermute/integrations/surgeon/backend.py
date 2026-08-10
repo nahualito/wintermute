@@ -180,7 +180,9 @@ class SurgeonBackend:
                         "function": {
                             "name": tool.name,
                             "description": tool.description,
-                            "parameters": tool.inputSchema,
+                            "parameters": getattr(
+                                tool, "inputSchema", getattr(tool, "input_schema", {})
+                            ),
                         },
                     }
                 )

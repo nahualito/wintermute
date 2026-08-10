@@ -153,8 +153,17 @@ module = [
   "llama_index.vector_stores.qdrant",
   "qdrant_client",
   "qdrant_client.*",
+  "mcp.server.fastmcp",
 ]
 ignore_missing_imports = true
+
+# mcp.server.fastmcp has no type stubs; @mcp.tool() decorator is untyped
+[[tool.mypy.overrides]]
+module = [
+  "wintermute.WintermuteMCP",
+  "wintermute.integrations.surgeon.server",
+]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 addopts = "-q"

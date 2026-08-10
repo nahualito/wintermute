@@ -172,7 +172,9 @@ class MCPRuntime:
             # Create Wintermute Tool
             wm_tool = Tool(
                 name=mt.name,
-                input_schema=mt.inputSchema,
+                input_schema=getattr(
+                    mt, "inputSchema", getattr(mt, "input_schema", {})
+                ),
                 output_schema={},
                 handler=make_handler(mt.name),
             )
@@ -276,7 +278,7 @@ async def _stdout_to_session_stream(
                 if not line:
                     continue
                 try:
-                    message = JSONRPCMessage.model_validate_json(line)
+                    message = cast(Any, JSONRPCMessage).model_validate_json(line)
                     session_message = SessionMessage(message=message)
                 except Exception as exc:
                     try:

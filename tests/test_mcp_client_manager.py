@@ -689,7 +689,7 @@ def test_stdin_pump_serializes_messages_to_stdout() -> None:
             )
         )
 
-        msg = JSONRPCMessage.model_validate(
+        msg = cast(Any, JSONRPCMessage).model_validate(
             {"jsonrpc": "2.0", "id": 7, "method": "ping"}
         )
         await sender.send(SessionMessage(message=msg))
